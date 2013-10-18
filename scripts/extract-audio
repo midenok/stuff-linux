@@ -82,7 +82,7 @@ do
         -i|--in)
             in_file=$2
             shift 2;;
-        -l|--lang)mk
+        -l|--lang)
             track=$2
             set_lang "$2"
             shift 2;;
