@@ -1,0 +1,1517 @@
+#!/usr/bin/perl
+# riptoh264
+# Script to rip dvd main titles or specified titles to AVI or MKV
+#
+# Depends on: avi2mkv version 1.1.0 or newer (http://blog.fangornsrealm.eu/avi2mkv/)
+#             choose_video_parameters version 0.2.0 or newer (http://blog.fangornsrealm.eu/choose_video_parameters/)
+#             toolbox_fangorn (http://blog.fangornsrealm.eu/toolbox_fangorn/)
+#             mplayer/mencoder with x264 support (http://www.mplayerhq.hu)
+#
+# mplayer has to be compiled with "export LINGUAS=en" for correct file format detection
+#
+# Author: fangorn (at forums.gentoo.org)
+#         Thanks to the author(s) of abdvde where I borrowed some routines and ideas ;-)
+#
+# Licence: GPL (dependencies might differ), use at your own risk, no warranties.
+# 
+# Requests: These all are features that I use on a regular basis. If you can think of another cool feature, 
+#           don't hesitate to contact me. Also you can look for updated versions at 
+#           http://forums.gentoo.org/viewtopic-t-744041-start-0-postdays-0-postorder-asc-highlight-.html 
+#           or at the project page at http://fangornsrealm.eu
+#
+# Feature list:
+# - rips longest title of a DVD, DVD directory structure or ISO file by default
+# - optionally rips specified titles and give them special names given on command line 
+#   (for example for ripping episodic TV shows)
+# - handles up to two audio streams in specifiable languages. 
+#   optionally audio stream order can be reversed (mkv_secondlanguage as default stream)
+#   Default languages are German and English. If you want other languages, just edit the script
+#   If you just need english for example, change language settings and set singleaudio="yes" as a default
+# - automatically detects source material (NTSC, NTSC movie, PAL) and adjusts filter chain.
+# - automatically transports original DVD chapter marks into Matroska containers. 
+# - automatically detects and deinterlaces TV productions according to the video standard
+# - removes telecining of progressive material to interlaced TV standards 
+#   (Thanks to the author(s) of abdvde where I borrowed the algorithm)
+# 20090720
+# - optionally copies disk in drive to harddisk ISO file first
+# 20090822
+# - optionally automatically removes black borders of widescreen movies
+#   (Thanks to the author(s) of abdvde where I borrowed the detection algorithm)
+# 20091017
+# - optionally rips vobsub subtitles (all of them) and muxes them into the Matroska file
+# 20091028
+# - optionally specify telecining method on the command line
+# - optionally automatically expand video frame to 16/9 aspect ratio after cropping black borders
+# - optionally automatically detect non-anamorphic dvds and make it a 16/9 movie by cropping black borders and expanding video frame
+# 20091123
+# - optionally handles video encoding profile presets
+#   (I wish to thank the developer(s) of h264enc for providing this excellent collection of presets)
+# - optionally rips all titles of a disk
+# - when ripping all titles, skip titles shorter than xx minutes
+# 20100206
+# - automatically scales video size to restrictions of the selected x264 video preset/playback device
+# - optionally specify output video width and/or height on the command line
+#   should only one parameter be given, video is scaled to calculated value given by specified value and source aspect ratio
+#   and add black borders if the selected x264 video preset/playback device demands it
+# - checks video bitrate against x264 preset limits (through choose_x264_encoding_parameters.sh version 0.2.0 or newer)
+# 20100418
+# - configuration file handling (using toolbox_fangorn version 0.1.0 or newer)
+# - output file in another directory (configurable)
+# - support multiple audio languages
+# - specify languages on the command line
+# - only process subtitles with specified languages by default
+# - optionally process all subtitles
+# 20100601
+# - automatically cleans temporary directory if muxing succeeded and program is not in debug mode
+# - optionally override video encoding parameters with own mencoder -ovc encoder -<options> line
+# - optionally pass raw, preformatted, unsupported commands to mencoder
+#
+# Todo: 
+#       - telecining/interlacing detection 
+#       - optional Bitrate calculator to match given size
+#       - consider video bitrate restrictions and video geometry at bitrate calculation
+#       - support interlaced detection when mediainfo is present ?
+#       - support closed caption subtitles (through ccextractor.sourceforge.net)
+#       - move tempdir handling to toolbox
+#
+# Changelog: 
+#   20090720
+#       - Make second language optional (only one language when second variable is empty)
+#       - dropped the long term unsupported "low quality" mode
+#   20090822
+#       - program rewrite with more readable structure (I hope) and much more documentation of the settings and parameters
+#       - moved temporary files into temporary directory for easier removal
+#   20090905
+#       - fixed support for deinterlacing and dynamic noise reduction
+#   20091017
+#       - outsourced muxing of the matroska container to avi2mkv. This version now depends on it for muxing Matroska containters
+#   20091028
+#       - fixed a bug when specifying a name for the output movie
+#   20091114
+#       - fixed a bug when encoding to AVI container
+#   20091130
+#       - newly written option parsing and help text
+#       - added some options passed to avi2mkv for muxing
+#   20100206
+#       - outsourced video scaling calculation to choose_x264_encoding_parameters.sh (version 0.2.0 or newer)
+#   2.0.0
+#       - rewritten in perl
+#       - removed dependency on lsdvd (now fully done by mplayer)
+#       - removed dependency on dvdxchap (now fully done by mplayer)
+#       - removed dependency on ffmpeg (now fully done by mplayer)
+#       - removed dependency on avimerge (by removing the ability to mux multiple audio streams to AVI containers)
+#       - uses VOLUMEID if it is present if no title is given and ripping directly from DVD drive
+#       - linear pcm audio is "converted" to pcm by default and reencoded to something matching the chosen x264 preset when muxed with avi2mkv
+#       - removed nice program out of encoding process when on windows
+#       - default is now to test for input to be directory or ISO file (--directory is normally not needed anymore)
+#   2.0.3
+#       - fixed a bug in automatic cropping
+#       - added containerformat = avi to the list of options
+#   2.0.5
+#       - fixed bugs in configuration file handling
+#       - outsourced chapter extraction to toolbox_fangorn (version 0.3.0 or newer)
+#   2.0.6
+#       - fixed a bug in filename handling
+#   2.0.7
+#       - fixed a bug in passing languages to avi2mkv
+#   2.0.8
+#       - fixed the --rip_all_titles feature
+#   2.0.9
+#       - found a workaround the asynchronous audio in newer versions of mencoder when copying ac3 or dts audio streams
+#   2.1.0
+#       - new order of parameters in choose_video_parameters, you need to use following versions of the other tools
+#                   avi2mkv                  2.2.0 or newer
+#                   toolbox_fangorn          0.4.0 or newer
+#                   choose_video_parameters  0.2.6 or newer
+#   2.1.1    
+#      - generalized the toolbox_file loading
+#        (the user does not have to edit the program any more)
+#
+# Known issues: - does not work with blanks in the isofile/directory name or given title or with image files without extension
+#               - sometimes there is no audio stream in the output video. 
+#                 This can be "solved" by encoding just the standard stream to MP3 using the -m option in most cases
+#               - cannot rip features under 5 minutes length when black border removal is used
+#               - telecining detection and interlacing detection do not work atm. and have to be set by hand
+#                 but as most people either use mostly NTSC movies or PAL productions, this does not have to be done so often. Sorry!
+#               - DVD subtitles sometimes fail to be fully extracted. If that happens, avi2mkv will fail with strange error messages.
+#                 The defective subtitle is mostly distinguishable by a much smaller size of the .sub and .idx file.
+#                 Take the command line in the <$opt->{moviename}>_avi2mkv_command.log, delete the parts with the defective subtitles 
+#                 and adjust the --track-order option (delete from the end as many entries (for example ,8:0) as you deleted subtitles)
+#               - with much more than 10 subtitle tracks, it seems the command line gets too long
+#               - ripping into ISO file is only supported on Linux and other UNIXOID systems
+#
+
+my $Versionnumber="2.1.1";
+my $os = $^O;                 # automatic OS detection, do not change!
+my $toolbox;
+my $nulldevice;
+my $progs = {};
+my @mplayer_info;
+my @mplayer_title_info;
+
+#####################################################################################################
+# Settings to be edited by the user                                                                 #
+#####################################################################################################
+# Paths to necessary programs. If your's differ, adjust.
+# this one is needed to be correct. Else everything will fail.
+BEGIN {
+    my $os2 = $^O;
+    if ($os2 =~ m/MSWin/) {
+        push @INC, "c:/fangorn/";
+	$toolbox = "toolbox_fangorn.pl";
+    } else {
+        push @INC, "/usr/local/bin";
+	my $login = getlogin || getpwuid($<);
+        push @INC, "/home/$login/bin" if ($login);
+        push @INC, "/usr/bin";
+	$toolbox = "toolbox_fangorn";
+    }    
+}
+
+#####################################################################################################
+# Default settings (function may break if changed)                                                  #
+#####################################################################################################
+
+# Default settings section
+# DVD source format preferences. Please adjust by hand, as detection does not work atm.
+# NTSC movie DVD
+#TELECINE_METHOD="24000/1001p hard telecined to 30000/1001t"
+# NTSC DVD with real 24p
+#TELECINE_METHOD="24000/1001p soft telecined to 30000/1001t"
+# PAL DVD
+my $TELECINE_METHOD="25p telecined to 25i";
+
+my @languages;
+# Options
+my $opt = {
+    interlaced => "no",       # Default: do not deinterlace. If you have interlaced sources, activate by hand using the -i option or here as detection does not work atm.
+    singleaudio => "no",      # encode both specified languages if available. Set this to yes to only get one language by default.
+    chapter => 0,             # use longest title on the disc
+    directory => "no",        # use /dev/dvd as input source by default
+    specname => "no",         # no special output name specified
+    crop => "no" ,            # do not crop black borders
+    ripfirst => "no",         # rip disk to harddisk first
+    info => "no",             # only print information of longest title and exit the program
+    DEVICE => "",             # device and title to read from
+    NCH => 0 ,                # number of chapters
+    TITLE => 0  ,             # number of title to encode
+    expandvideo => "" ,       # add black borders to reach 16/9 aspect ratio after cropping black borders
+    expandif => "no",         # automatically crop black borders and expand to 16/9 if source is not anamorphic
+    secondaudiofirst => "no", # put second audio stream first in final container is off 
+    subtitles => "no" ,       # no subtitles in output Matroska
+    noisereduction => "no",   # no dynamic noise reduction
+    sublist => "",            # list of subtitle files and according language
+    converttomp3 => "no",     # copy original audio track(s)
+    profile => "nq" ,         # x264 encoding profile preset to use
+    ripall => "no",           # rip all titles of the disk
+    titlenum => "" ,          # list of titles longer than two minutes
+    converttostereo => "",
+    normalizeaudio => "",
+    setaudiovolume => "",
+    INTERLACE_TOLERANCE => 5, # if less than 5% is interlaced, then the video was likely edited after it was telecined. Apply the appropriate IVTC filter chain
+    min_title_length => 120,  # minimum length of titles in seconds when processing all titles of a DVD
+    TMPPATH => "",            # Path to store temporary files (Default: current working directory)
+    OUTPUTPATH => "" ,        # Path to store output files (Default: current working directory)
+    FORMAT => "PAL",          # video standard PAL/NTSC
+    VOLUMEID => "",           # volume ID of the disk to encode
+    BITRATE => 1200,          # Video bitrate. For h.264 this is more than sufficient for most movies
+    DISCID => "",             #
+    ASPECT => 0 ,             # aspect ratio id of the video stream (3 is 16:9, 2 is 4:3)
+    SRC_FPS => 0 ,            # frames per second of source video
+    FPS => "" ,               # frames per second of output video
+    SRC_HEIGHT => 0,          # height of the source video in pixels
+    SRC_WIDTH => 0 ,          # width of the source video in pixels
+    SUBTITLE_STREAMS => 0,    # number of subtitle streams
+    AUDIO_STREAMS => 0 ,      # number of audio streams
+    LENGTH => 0 ,             # length of the title in seconds
+    moviename => "" ,         # name of the movie to encode
+    FILTER1 => "" ,           # Filter chain for Encoding pass 1
+    FILTER2 => "",            # Filter chain for Encoding pass 2
+    CROP => "" ,              # crop parameters for encoding
+    avi2mkv_replaceinternalaudio => "", # streams to put into the final container
+    EXPAND => "",
+    audiotarget => "copy",
+    targetwidth => "",
+    targetheight => "",
+    languages => \@languages,
+    avi2mkv_pass_languages => "",
+    processallsubs => "no", 
+    override_video_encoder => "",
+    rawcommand => "",
+};
+
+#
+# Globals
+#
+
+#use warnings;
+use strict;
+use feature 'switch';
+use Cwd;
+use File::Basename;
+use File::Copy;
+use File::Spec::Functions;
+
+use Data::Dumper;
+$Data::Dumper::Purity = 1;
+use POSIX qw(locale_h);
+my $old_locale = setlocale(LC_ALL);
+setlocale(LC_ALL, "C");
+use locale;
+
+require $toolbox;
+
+sub help_text ()
+{   
+    my $prog = $0; 
+    if ( $os =~ /MSWin.*/) {
+	$prog =~ s/^.*\\//;
+    } else {
+	$prog =~ s{^.*/}{};
+    }
+    print STDERR << "EOF";
+    $prog Version $Versionnumber
+
+usage $prog [<options>] moviename [name of output file]
+   Available options are:
+   DVD options:
+    --rip_all_titles|-A 
+	       rip all titles of the disc 
+    --title_number|-t title
+	       instead of encoding the longest title, use this title number
+    --directory_mode|-d 
+	       directory/imagefile mode. moviename has to be directory/imagefile name
+	       (for example DVD ripped into directory using "dvdbackup -M ..." )
+    --copy_to_iso|-R
+	       rip disk to hard disk drive first 
+    --riptoh264_rip_subtitles|-s 
+	       copy all subtitles to Matroska container
+
+   Output options:
+    --specify-output-name|-n 
+	       specify name of the episode/title selected with the -t option  
+    --use_avi_output|-a 
+	       avi only (skip matroska creation and scale anamorphic video to 1024:576)
+    --outputpath|--op
+	       specify output directory (Default: current working directory)
+    --tmppath
+	       specify the path for temporary files
+    --rip_subtitles|-s
+	       rip subtitles (Warning: very slow)
+    --process_all_subs
+	       process all subtitles when ripping them. Default: process only subtitles with preferred languages
+
+   Audio processing:
+    --single_audio|-1         
+	       use single audio stream only (uses first language if available, else 
+	       second language or if this is also not available the default stream)
+    --convert_to_mp3|-m
+	       encode single audio stream to mp3 instead of copying
+	       (helps with faulty audio streams which else just prohibit the encoding)
+    --reverse_audio_streams|-r 
+	       second language first in Matroska output
+    --language|-l <3-digit languagecode>
+	override language definitions in script / config file 
+	issue multiple times for multiple languages!
+	Valid language codes are just the ones available as 3-digit AND 2-digit code!
+
+	Caution: This has to be set before specifying external audio streams!!!
+
+	will be used in the order given on the command line
+	example: english and german audio and english audio commentary would be
+		 --language eng --language ger --language eng
+
+   Video options: 
+    --force_interlaced|-i
+	       If automatic detection fails, force deinterlace 
+    --noise_reduction|-N 
+	       reduce dynamic noise in source (mainly for older productions)
+    --video_bitrate|-b bitrate
+	       give a video bitrate to encode process (default: 1200 [kBit/s])
+    --crop|-c
+	       crop black borders of widescreen movies (Default: Off)
+    --expand_video|-e
+	       expand video frame to 16/9 aspect ratio after cropping black borders (Default: Off)
+    --expand_if_cropped|-E
+	       automatically crop black borders and expand to 16/9 if source is not anamorphic
+    --targetwidth|-W
+	       specify video geometry/width of output video (if you know the limits of the device to play the video)
+    --targetheight|-H
+	       specify video geometry/height of output video (if you know the limits of the device to play the video)
+
+    --x264_encoding_preset|-p preset
+	       x264 video encoding profile preset (Default: hq) 
+    --x264_encoding_preset|-p list 
+	       lists all available profile presets    
+
+    --telecine-method|-T telecinemethod
+	       valid values are 
+		  -T "25p telecined to 25i"
+		  -T "24000/1001p soft telecined to 30000/1001t"
+		  -T "24000/1001p hard telecined to 30000/1001t"
+		  -T "24000/1001p randomly soft and hard telecined to 30000/1001t"
+		  -T "30000/1001p telecined to 30000/1001i"
+		  -T "60000/1001f telecined to 30000/1001i"
+
+   Special modes: 
+    --override_video_encoder <encoder command>
+	       use own encoder configuration instead of x264
+	       this overrides anything - including bitrate settings - besides the one- or twopass setting 
+	       and any video filters applied. Tested encoders are xvid and all lavc encoders. Others might work.
+	       Examples: 
+	       XVID
+	       -ovc xvid -xvidencopts bvhq=1:chroma_opt:quant_type=mpeg:bitrate=658
+	       DIVX
+	       -ffourcc DX50 -ovc lavc -lavcopts vcodec=mpeg4:vbitrate=2000:vhq:keyint=15
+    --raw_mencoder_command|-R <rawcommands> 
+	       raw comamnds for mencoder to process. For instance to hardcode a subtitle do something like this
+		  -R "-fontconfig -font \"Arial Black\" -subfont-text-scale 2.7 -sub-bg-alpha 150 -subpos 97 -subcp cp1250 -sub <subfile>"
+    --dvd_info|-I 
+	       print info on the longest track
+    --help|-h  
+	       print this help text
+
+   Options passed to avi2mkv for merging:
+    --mp4mux|--mp4 
+	       mux to ISO MP4 container instead of Matroska
+    --ogmmux|--ogm 
+	       mux to OGM container instead of Matroska
+    --tsmux|--ts 
+	       mux to MPEG Transport Stream container instead of Matroska
+    --mp3_audio|--a3  
+	       convert audio to MPEG1 Layer3 before muxing
+    --aac_audio|--aa  
+	       convert audio to AAC before muxing
+    --ogg_audio|--ao  
+	       convert audio to Ogg Vorbis before muxing
+    --flac_audio|--af  
+	       convert audio to Flac before muxing
+    --ac3_audio|--aac3  
+	       convert audio to AC3 before muxing
+    --audio_bitrate|--ab
+	       bitrate for audio encoding in kBit/s
+    --audio_normalize|--an
+	       normalize audio 
+    --audio_volume|--av <volume>
+	       Audio volume in dB [-200 to 60 - default is 5]        
+    --audio_twochannel|--a2
+	       force conversion to two channel stereo even if container support multi channel
+EOF
+    exit 0;
+}
+
+#
+# Command line options processing
+#
+sub init()
+{
+    my $opt = shift;
+    my $languages_cleared = "no";
+    use Getopt::Long qw(:config no_ignore_case bundling);
+    GetOptions( "help|h"  =>                  sub {$opt->{help} = 1;}, 
+	"debug"   =>                  sub {$opt->{debug} = 1;},
+	"single_audio|1" =>           sub {$opt->{singleaudio} = "yes";},
+	"mp4mux|mp4" =>               sub {$opt->{containerformat} = "mp4";},
+	"ogmmux|ogm" =>               sub {$opt->{containerformat} = "ogm";},
+	"tsmux|ts" =>                 sub {$opt->{containerformat} = "ts";},
+	"mp3_audio|a3" =>             sub {$opt->{audiotarget} = "mp3";},
+	"aac_audio|aa" =>             sub {$opt->{audiotarget} = "aac";},
+	"ogg_audio|ao" =>             sub {$opt->{audiotarget} = "ogg";},
+	"flac_audio|af" =>            sub {$opt->{audiotarget} = "flac";},
+	"ac3_audio|aac3" =>           sub {$opt->{audiotarget} = "ac3";},
+	"audio_bitrate|ab=i" =>       sub {$opt->{abitrate} = "audio_bitrate " . $_[1];},
+	"audio_normalize|an" =>       sub {$opt->{normalizeaudio} = "audio_normalize";},
+	"audio_volume|av=i" =>        sub {$opt->{setaudiovolume} = "audio_volume " . $_[1];},
+	"audio_twochannel|a2" =>      sub {$opt->{converttostereo} = "audio_twochannel";},
+	"directory_mode|d" =>         sub {$opt->{directory} = "yes";},
+	"force_interlaced|i" =>       sub {$opt->{interlaced} = "yes";},
+	"dvd_info|I" =>               sub {$opt->{info} = "yes";},
+	"language|l=s" => sub {if (($_[1] =~ m/^\w{3}$/) && (&lookup_str($std::iso639_language_code_map, $_[1])) && (&lookup_str($std::lang_code_map_3_to_2, $_[1]))) {
+		if ($languages_cleared eq "no") {
+		    for (my $i = 0; $i < @languages; $i++) {
+			delete $languages[$i]; 
+		    }
+		    $languages_cleared = "yes";
+		}
+		push (@languages, $_[1]);
+		$opt->{avi2mkv_pass_languages} = $opt->{avi2mkv_pass_languages} . " --language " . $_[1];
+	    }
+	},
+	"crop|c" =>                   sub {$opt->{crop} = "yes";},
+	"expand_video|e" =>           sub {$opt->{expandvideo} = "yes";$opt->{crop} = "yes";},
+	"targetwidth|W=i" =>          sub {$opt->{targetwidth} = $_[1];},
+	"targetheight|H=i" =>         sub {$opt->{targetwheight} = $_[1];},
+	"expand_if_cropped|E" =>      sub {$opt->{expandif} = "yes";},
+	"reverse_audio_streams|r" =>  sub {$opt->{secondaudiofirst} = "yes";},
+	"rip_subtitles|s" =>          sub {$opt->{subtitles} = "yes";},
+	"process_all_subs" =>         sub {$opt->{process_all_subs} = "yes";},
+	"convert_to_mp3|m" =>         sub {$opt->{converttomp3} = "yes";$opt->{singleaudio} = "yes";},
+	"use_avi_output|a" =>         sub {$opt->{containerformat} = "avi";},
+	"copy_to_iso|R" =>            sub {$opt->{ripfirst} = "yes"; $opt->{directory} = "no";},
+	"rip_all_titles|A" =>         sub {$opt->{ripall} = "yes";},
+	"title_number|t=i" =>         sub {$opt->{chapter} = $_[1];},
+	"force_ntsc|f" =>             sub {$opt->{FORMAT} = "NTSC";},
+	"noise_reduction|N" =>        sub {$opt->{noiseredction} = "yes";},
+	"video_bitrate|b=i" =>        sub {$opt->{BITRATE} = $_[1];},
+	"telecinemethod|T=s" =>       sub {$opt->{TELECINE_METHOD} = $_[1];},
+	"specifyoutputname|n" =>      sub {$opt->{specname} = "yes";},
+	"x264_encoding_preset|p=s" => sub {$opt->{profile} = $_[1];},
+	"outputpath|op=s"          => sub {$opt->{OUTPUTPATH} = $_[1];},
+	"override_video_encoder=s" => sub {$opt->{override_video_encoder} = $_[1];},
+	"raw_mencoder_command|R=s" => sub {$opt->{raw_mencoder_command} = $_[1];},
+    );
+    &help_text () if ($opt->{help}); 
+}
+
+sub test_options ()
+{
+    my $opt = shift;
+    # testing input parameters for plausibility and setting necessary data for processing
+    $opt->{LSDEVICE} = "";
+    print STDERR "list if arguments is " . join (' ', @ARGV) . "\n" if $opt->{debug};
+    if (@ARGV > 0) {
+	# Verzeichnis
+	if ( -d "$ARGV[0]" ) {
+	    print STDERR "first argument $ARGV[0] is a directory \n" if $opt->{debug};
+	    $opt->{moviename} = "$ARGV[0]";
+	    # delete trailing /
+	    $opt->{moviename} =~ s!/$!!;   
+	    $opt->{outputname} = $opt->{moviename} . ".mkv";
+	    $opt->{LSDEVICE} = $opt->{moviename};
+	} elsif ( -f "$ARGV[0]") { 
+	    # ISO file mode
+	    print STDERR "first argument $ARGV[0] is a file \n" if $opt->{debug};
+	    $opt->{LSDEVICE} = $ARGV[0];
+	    ($opt->{moviename}, $opt->{path}, $opt->{suffix}) = fileparse($opt->{LSDEVICE},qr{\.\w+});
+	    $opt->{outputname}=$opt->{moviename} . ".mkv";
+	} else {
+	    print STDERR "using DVD device as source \n" if $opt->{debug};
+	    $opt->{directory} = "no";
+	    $opt->{LSDEVICE} = "/dev/dvd";
+	}
+    } else {
+	print STDERR "using DVD device as source \n" if $opt->{debug};
+	$opt->{directory} = "no";
+	$opt->{LSDEVICE} = "/dev/dvd";
+    }
+    if ( $opt->{specname} eq "yes" ) {
+	my $name;
+	if ($opt->{directory} eq "yes") {
+	    $name = $ARGV[1];
+	} else {
+	    $name = $ARGV[0];
+	}
+	# special name specified
+	unless ( $name ) {
+	    print STDERR "you have to specify a output name when using the -n option\n";
+	    unless ( $opt->{profile} eq "list" ) {
+		&help_text ();
+		exit 1;
+	    }
+	}
+	$opt->{outputname} = $name . ".mkv";
+	$opt->{moviename} = $name; 
+    }
+
+    print STDERR "using $opt->{LSDEVICE} as DVD device \n" if $opt->{debug};
+    print STDERR "directory mode is $opt->{directory}\n" if $opt->{debug};
+    my @mplayer_info = `$progs->{mplayer} -dvd-device $opt->{LSDEVICE} -msglevel identify=6 -frames 0 -identify -vc null -vo null -ao null dvd:// 2>&1`;
+#   print STDERR Dumper( @mplayer_info) if $opt->{debug};
+    my $regex = qr/ID_DVD_TITLE_\d+_LENGTH=(\d+.\d+).*/;
+    my (@lengths) = grep (s/$regex/$1/, @mplayer_info);
+    chomp @lengths;
+#   print STDERR Dumper( @lengths ) if $opt->{debug};
+    if ( $opt->{ripall} eq "yes" ) {
+	my $tmpnum = 1;
+	foreach my $length (@lengths) { 
+#         print STDERR "Length is $length\n"  if $opt->{debug};
+	    my $tmplen = $length;
+	    printf "Title %s is %s seconds long \n", $tmpnum, $tmplen;
+	    # only using titles longer than min_title_length seconds
+	    if ( $tmplen > $opt->{min_title_length} ) {
+		$opt->{titlenum} = $opt->{titlenum} . " " . $tmpnum;
+	    }
+	    $tmpnum++;
+	} 
+	printf  "List of titles to encode: \n" , $opt->{titlenum};
+    } else {
+	if ( $opt->{chapter} == 0 ) {
+	    # find longest track
+	    my $tmpnum = 1;
+	    my $maxlength = 0;
+	    foreach (@lengths) { 
+		print STDERR "Length is $_\n"  if $opt->{debug};
+		if ($_ > $maxlength) {
+		    $maxlength = $_;
+		    $opt->{TITLE} = $tmpnum;
+		}
+		$tmpnum++;
+	    }            
+	    # find number of chapters of longest track
+	    my $regex = qr/ID_DVD_TITLE_$opt->{TITLE}_CHAPTERS=(\d+)/;
+	    ($opt->{NCH}) = grep (m/$regex/, @mplayer_info);
+	    chomp ($opt->{NCH});
+	    $opt->{NCH} =~ s/$regex/$1/;
+	} else {
+	    # title specified on the command line
+	    $opt->{TITLE} = $opt->{chapter};
+	    my $regex = qr/ID_DVD_TITLE_$opt->{TITLE}_CHAPTERS=(\d+)/;
+	    ($opt->{NCH}) = grep (m/$regex/, @mplayer_info);
+	    chomp ($opt->{NCH});
+	    $opt->{NCH} =~ s/$regex/$1/;
+	}
+	printf   "Encoding Movie %s from device %s\n", $opt->{moviename}, $opt->{LSDEVICE};
+	printf   "encoding Title %s which has %s chapters\n", $opt->{TITLE}, $opt->{NCH};
+    }  
+
+    ($opt->{VOLUMEID}) = grep (/ID_DVD_VOLUME_ID=(.+)/ , @mplayer_info);
+    $opt->{VOLUMEID} =~ s/ID_DVD_VOLUME_ID=(.+)/$1/;
+    if ( $opt->{VOLUMEID} eq "" ) {
+	$opt->{VOLUMEID} = "unknown";
+    }
+    printf  "Volume ID: " . $opt->{VOLUMEID} . "\n";
+    ($opt->{DISCID}) = grep (/ID_DVD_DISC=(\S+)/, @mplayer_info);
+    $opt->{DISCID} =~ s/ID_DVD_DISC=(.+)/$1/;
+    printf  "Disc ID: " . $opt->{DISCID} . "\n";
+
+    if (( $opt->{directory}  eq "no" ) && ( $opt->{specname} eq "no" )) {
+	if ($opt->{VOLUMEID}) {
+	    $opt->{moviename} = $opt->{VOLUMEID};
+	    $opt->{outputname} = $opt->{moviename} . ".mkv";
+	} elsif ( $opt->{chapter} > 0 ) {
+	    # generating unique name
+	    $opt->{moviename} = "dev_dvd_" . $opt->{chapter} . ".mkv";
+	    $opt->{outputname} = $opt->{moviename} . "_" . $opt->{chapter} . ".mkv";
+	} else {
+	    $opt->{moviename} = "dev_dvd.mkv";
+	    $opt->{outputname} = $opt->{moviename} . ".mkv";
+	}
+    }
+    # preparing and cleaning temporary directory
+    unless ( "" eq $opt->{TMPDIR} ) {
+	if ( -d $opt->{TMPDIR}) {
+            $opt->{TMP} = catfile( $opt->{TMPDIR}, 'tmpdir_' . $opt->{moviename});
+#	    $opt->{TMP} = $opt->{TMPDIR} . "/tmpdir" . $opt->{moviename};
+	} else {
+            $opt->{TMP} = catfile(curdir(), 'tmpdir_' . $opt->{moviename});
+#	    $opt->{TMP} = "tmpdir_" . $opt->{moviename};
+	}
+    } else {
+	$opt->{TMP} = catfile(curdir(), 'tmpdir_' . $opt->{moviename});
+#	$opt->{TMP} = "tmpdir_" . $opt->{moviename};
+    }
+    if ( -d "$opt->{TMP}"  ) {
+	# cleaning existing directory       
+	my $path = cwd ();
+	chdir $opt->{TMP}; 
+	opendir(IMD, cwd () ) || die("Cannot open directory"); 
+	my @thefiles = readdir(IMD);
+	closedir (IMD);
+	foreach ( @thefiles) {
+	    next if (($_ eq ".") || ($_ eq ".."));
+	    unlink $_;
+	}
+	chdir $path;
+    } else {
+	# creating nonexistant directory
+	mkdir $opt->{TMP};
+    }
+
+    # building ISO file
+    if ( $opt->{ripfirst} eq "yes" ) {
+	&riptoh264_dump_device ();
+    }  
+
+    # preparing output path
+    unless ( "" eq $opt->{OUTPUTPATH} ) {
+	if ( -d $opt->{OUTPUTPATH}) {
+	    $opt->{OUTDIR} = $opt->{OUTPUTPATH} . "/";
+	} else {
+	    $opt->{OUTDIR} = "./";
+	}
+    } else {
+	$opt->{OUTDIR} = "./";
+    }
+    if ($opt->{directory} eq "yes" ) {
+	$opt->{DEVICE} = sprintf " -dvd-device %s dvd://%s", $opt->{LSDEVICE}, $opt->{TITLE};
+    } else {
+	$opt->{DEVICE} = "dvd://" . $opt->{TITLE};
+    }
+    print STDERR "using device $opt->{DEVICE}\n" if $opt->{debug};
+}
+
+sub get_dvd_info ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my $progs = shift; 
+    # getting and outputting all necessary data for the DVD processed
+    @mplayer_info = `$progs->{mplayer} -dvd-device $opt->{LSDEVICE} -msglevel identify=6 -frames 0 -identify -vc null -vo null -ao null dvd:// 2>$nulldevice`;
+#   print STDERR Dumper( @mplayer_info) if $opt->{debug};
+    print $LOG "$progs->{mplayer} $opt->{DEVICE} -msglevel identify=8  -identify -frames 0 -vc null -vo null -ao null 2>&1\n" if $opt->{debug};
+    @mplayer_title_info = `$progs->{mplayer} $opt->{DEVICE} -msglevel identify=8  -identify -frames 0 -vc null -vo null -ao null 2>&1`;
+#   print STDERR Dumper( @mplayer_title_info) if $opt->{debug};
+    unless ($opt->{LENGTH} > 0) {
+	my $regex = qr/ID_DVD_TITLE_$opt->{TITLE}_LENGTH=(.+)/;
+	($opt->{LENGTH}) = grep (s/$regex/$1/, @mplayer_title_info);
+	chomp $opt->{LENGTH};
+    }
+    printf  "  Title %s: has %s chapters and is %s seconds long\n", $opt->{TITLE}, $opt->{NCH}, $opt->{LENGTH};
+    my $regex = qr/number of audio channels on disk:\s+(\d+)/;
+    ($opt->{AUDIO_STREAMS}) = grep (s/$regex/$1/, @mplayer_title_info);
+    chomp ($opt->{AUDIO_STREAMS});
+    # stop processing this title if there are no audio streams present
+    return 1 if ($opt->{AUDIO_STREAMS} < 1);
+    $opt->{AUDIO_STREAMS} =~ s/\.$//;
+    my @AUDIO_AID;
+    my @AUDIO_LANGUAGE;
+    my @AUDIO_FORMAT;
+    if ( 0 < $opt->{AUDIO_STREAMS} ) {
+	printf  "    %s audio streams:\n", $opt->{AUDIO_STREAMS};
+	my $regex = qr/audio stream: .*/;
+	my @audio_info = grep (m/$regex/ , @mplayer_title_info);
+	foreach (@audio_info) {
+	    chomp;
+	    my @temp = split (/\s+/, $_);
+	    my $aid = $temp[9];
+	    $aid =~ s/\.$//;
+	    push (@AUDIO_AID, $aid);
+	    my $FORMAT = $temp[4];
+	    push (@AUDIO_FORMAT,$FORMAT); 
+	    my $LANGUAGE = $temp[7];
+	    push (@AUDIO_LANGUAGE,$LANGUAGE); 
+	    printf  "      ID=%s, language=%s, format=%s\n", $aid, $LANGUAGE, $FORMAT
+	}
+	$opt->{AUDIO_AID} = \@AUDIO_AID;
+        $opt->{AUDIO_FORMAT} = \@AUDIO_FORMAT;
+        $opt->{AUDIO_LANGUAGE} = \@AUDIO_LANGUAGE;         
+   }
+   $regex = qr/number of subtitles on disk:\s+(\d+)/;
+   ($opt->{SUBTITLE_STREAMS}) = grep (s/$regex/$1/, @mplayer_title_info);
+   chomp ($opt->{SUBTITLE_STREAMS});
+   $opt->{SUBTITLE_STREAMS} =~ s/\.$//;
+   if ( 0 < $opt->{SUBTITLE_STREAMS} ) {
+       my @SUB_SID;
+       my @SUB_LANGUAGE;
+       printf  "    %s subtitle streams:\n", $opt->{SUBTITLE_STREAMS};
+       my $regex = qr/subtitle\s+\(\s+sid\s+\):\s+.*/;
+       my @sub_info = grep (m/$regex/ , @mplayer_title_info);
+       foreach (@sub_info) {
+	   chomp;
+	   my @temp = split (/\s+/, $_);
+	   my $sid = $temp[4];
+	   $sid =~ s/,$//;
+	   push (@SUB_SID, $sid);
+	   my $LANGUAGE = $temp[6];
+	   $LANGUAGE =~ s/,$//;
+	   push (@SUB_LANGUAGE,$LANGUAGE); 
+	   printf  "      ID=%s, language=%s\n",$sid, $LANGUAGE;
+       }
+       $opt->{SUB_SID} = \@SUB_SID;
+       $opt->{SUB_LANGUAGE} = \@SUB_LANGUAGE;         
+   }
+   # getting necessary information for automatic processing
+   ($opt->{ASPECT}) = grep (/MPEG2.*/, @mplayer_title_info);
+   chomp $opt->{ASPECT};
+   my @temp = split (/\s+/, $opt->{ASPECT});
+   $opt->{ASPECT} = $temp[4];
+   $opt->{ASPECT} =~ s/\)$//;
+   &get_movie_parameters ($opt, \@mplayer_title_info);
+   given ($opt->{SRC_HEIGHT}) {
+       when ("480") {
+	   $opt->{FORMAT} = "NTSC";
+       }
+       when ("576") {
+	   $opt->{FORMAT} = "PAL";
+       }
+   }
+
+   # fine grain frame rate setting for NTSC format
+   if ( $opt->{SRC_FPS} eq "23.976" ) {
+       $opt->{FPS} = "24000/1001";
+   } elsif ( $opt->{SRC_FPS} eq "29.970" ) {
+       $opt->{FPS} = "30000/1001";
+   } else {
+       $opt->{FPS} = $opt->{SRC_FPS};
+   }
+   printf   "Video format is %s\n", $opt->{FORMAT};
+   my $widescreen="4/3";
+   if ( $opt->{ASPECT} == 3 ) {
+       $widescreen="anamorphic 16/9"
+   }
+   printf  "Source video has %s fps a picture geometry of %s x %s pixels and the video aspect is %s\n", 
+   $opt->{SRC_FPS}, $opt->{SRC_WIDTH}, $opt->{SRC_HEIGHT}, $widescreen;
+   return 0;
+}
+
+sub process_audio ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my $progs = shift; 
+    # setting default audio processing and CoDec
+    $opt->{audiocodec} = "-oac copy";
+
+    # finding first and second and following and extracting second and following audio stream(s) 
+    # if present, else just use the available ones or the default audio stream
+    my @audioids;
+    my @found;
+    my $audiostreams = 0;
+    foreach my $language (@{$opt->{languages}}) {
+	for (my $iter = 0; $iter < @{$opt->{AUDIO_LANGUAGE}}; $iter++) {
+	    my $twodigit = &find_twodigit_langcode ($language);
+	    print STDERR "language code is $_\n" if $opt->{debug};
+	    print STDERR "2-digit code is $twodigit\n" if $opt->{debug};
+	    print STDERR "language is " . @{$opt->{AUDIO_LANGUAGE}}[$iter] . "\n" if $opt->{debug};
+
+	    # compare with list of already used audio streams
+	    my $used;
+	    foreach my $f (@found) {
+		$used = "yes" if ($f == $iter); 
+		last;
+	    }
+	    # skip if already used this stream
+	    next if ($used);
+
+	    if (@{$opt->{AUDIO_LANGUAGE}}[$iter] eq $twodigit) {
+		print STDERR "found matching audio stream for language $_ with audio id " . @{$opt->{AUDIO_AID}}[$iter] . "\n" if $opt->{debug};
+		push @audioids, @{$opt->{AUDIO_AID}}[$iter];
+		$audiostreams++;
+		print STDERR "processing as audio stream $audiostreams\n" if $opt->{debug};
+#		if ($audiostreams == 1) {
+#		    $opt->{AUDIO} = "-aid " . @{$opt->{AUDIO_AID}}[$iter];
+#		} else {    
+		    print STDERR "extracting for later usage\n" if $opt->{debug};
+		    my $command = sprintf "%s %s -aid %s -dumpaudio -dumpfile %s/%s_%s.ac3", 
+		                           $progs->{mplayer}, $opt->{DEVICE}, @{$opt->{AUDIO_AID}}[$iter], $opt->{TMP}, 
+		                           $opt->{moviename}, @{$opt->{AUDIO_AID}}[$iter];
+		    print $LOG $command . "\n";
+		    system ($command);
+#		}
+		last;
+		push @found, $iter;
+	    }
+	}
+    }
+    $opt->{audioids} = \@audioids;
+#    if ( $opt->{converttomp3} eq "yes" ) {
+	# use default audio stream
+	$opt->{AUDIO} = "";
+	# convert audio stream to mp3
+	$opt->{audiocodec} = "-oac mp3lame -lameopts vbr=0:br=128:mode=0";
+#    } elsif ( $opt->{singleaudio} eq "no" ) {
+#	if (@audioids < 2) {
+	if ((@audioids < 2) && ($opt->{converttomp3} eq "yes" )) {
+	    # second language not available or not desired and mp3 downmix anyway
+	    $opt->{singleaudio} = "yes";
+       }
+#    }
+
+#    # detecting special audio streams
+#    my @mplayer_audio_info = `$progs->{mplayer} $opt->{DEVICE} $opt->{AUDIO} -identify -frames 0 -vc null -vo null -ao null  2>&1`;
+#    if ( 0 < scalar (grep (/Selected audio codec/ && /dvdpcm/, @mplayer_audio_info))) {
+#	# linear pcm audio, copy does not work, so reencode to pcm
+#	$opt->{audiocodec}=" -oac pcm";
+#    }
+}
+
+sub process_video_settings ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my $progs = shift; 
+    # create filter chain for video processing
+    if ( $opt->{interlaced} eq "no" ) {
+	# when interlaced source is not forced, do autodetection of telecining / interlacing of the source material
+
+	# at the moment does not work, so is deactivated. Set the telecining method and interlaced parameter by hand!
+	print $LOG "skip telecining detection, using preset Method: " . $TELECINE_METHOD . "\n";
+#      source ~/bin/test_telecine.sh
+#      detect_telecine
+    }
+
+    if ( $opt->{expandif} eq "yes" ) {
+	if ( $opt->{ASPECT} = 2 ) {
+	    $opt->{crop} = "yes";
+	    $opt->{expand} = "yes";
+	}
+    }
+
+    if ( $opt->{crop} eq "yes" ) {
+	&detect_crop ($LOG, $opt, $progs->{mplayer}, $opt->{DEVICE});
+    } else {
+	$opt->{CROP} = "";
+    }
+
+    if ( $opt->{FORMAT} eq "PAL" ) {
+	if ( $opt->{interlaced} eq "no" ) {
+	    #"25p telecined to 25i"
+	    $opt->{INPUT_FRAMERATE} = "";
+#         MENCODER_FILTERS="phase,softskip"
+	    $opt->{MENCODER_FILTERS} = "";
+	    $opt->{OUTPUT_FRAMERATE} = "-ofps 25";
+	} else {
+	    $opt->{INPUT_FRAMERATE} = "";
+	    if ( $opt->{interlaced} eq "no" ) {
+		$opt->{MENCODER_FILTERS} = "lavcdeint";
+	    }
+	    $opt->{OUTPUT_FRAMERATE} = "-ofps " . $opt->{FPS};
+	    print  "Unknown telecine method. Assuming interlaced source. Deinterlacing.\n";
+	}  
+    } else {
+	given ($opt->{TELECINE_METHOD}) {
+	    when ("24000/1001p soft telecined to 30000/1001t") {
+		$opt->{INPUT_FRAMERATE} = "";
+		$opt->{MENCODER_FILTERS} = "";
+		$opt->{OUTPUT_FRAMERATE} = "-ofps 24000/1001";
+	    }
+	    when ("24000/1001p hard telecined to 30000/1001t") {
+		$opt->{INPUT_FRAMERATE} = "";
+		$opt->{MENCODER_FILTERS} = "filmdint=io=5:4:fast=0,softskip";
+		$opt->{OUTPUT_FRAMERATE} = "-ofps 24000/1001";
+	    }
+	    when ("24000/1001p randomly soft and hard telecined to 30000/1001t") {
+		$opt->{INPUT_FRAMERATE} = "-fps 30000/1001";
+		$opt->{MENCODER_FILTERS} = "filmdint=io=5:4:fast=0,softskip";
+		$opt->{OUTPUT_FRAMERATE} = "-ofps 24000/1001";
+	    }
+	    when ("30000/1001p telecined to 30000/1001i") {
+		$opt->{INPUT_FRAMERATE} = "";
+		$opt->{MENCODER_FILTERS} = "phase,softskip";
+		$opt->{OUTPUT_FRAMERATE} = "-ofps 30000/1001";
+	    }
+	    when ("60000/1001f telecined to 30000/1001i") {
+		$opt->{INPUT_FRAMERATE} = "-fps 60000/1001";
+		#MENCODER_FILTERS="tfields"
+		$opt->{MENCODER_FILTERS} = "tfields,mcdeint=3:0:10"; # untested
+		# MENCODER_FILTERS="yadif=3,mcdeint=3:0:10" # untested
+		$opt->{OUTPUT_FRAMERATE} = "-ofps 60000/1001";
+	    }
+	    default {
+		$opt->{INPUT_FRAMERATE} = "";
+		if ( $opt->{interlaced} eq "no" ) {
+		    $opt->{MENCODER_FILTERS} = "lavcdeint";
+		}
+		$opt->{OUTPUT_FRAMERATE} = "-ofps " . $opt->{FPS};
+		print  "Unknown telecine method. Assuming interlaced source. Deinterlacing.\n";
+	    }
+	}
+    }
+}
+
+sub choose_encoding_profile ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my $progs = shift; 
+    my $geometryfilteroptions="";
+    my $encopts="";
+    my $expandopt="";
+    my $cropopts="";
+    my $targetwidthopt="";
+    my $targetheightopt="";
+
+    if ( $opt->{profile} eq "list" ) {
+	system ($progs->{choose_video_parameters} . " -L" );
+	exit 1;
+    }
+
+    unless ( $opt->{CROP} eq "" ) {
+	$cropopts="-c " . $opt->{CROP};
+    } else {
+	$cropopts="";
+    }
+    if (( $opt->{targetwidth} eq "" ) && ( $opt->{targetheight} eq "" )) {
+	# nothing specified
+	$opt->{targetwidth} = "720";
+	if ( $opt->{FORMAT} eq "NTSC" ) {
+	    # NTSC DVD 
+	    $opt->{targetheight} = "480";
+	    if ( $opt->{ASPECT} == 3 ) {
+		if ( $opt->{containerformat} eq "avi" ) {
+		    $opt->{targetwidth} = "854";
+		}
+	    }
+	} else { 
+	    # PAL DVD
+	    $opt->{targetheight} = "576";
+	    if ( $opt->{ASPECT} == 3 ) {
+		if ( $opt->{containerformat} eq "avi" ) {
+		    $opt->{targetwidth} = "1024";     
+		}
+	    }
+	}
+	$targetwidthopt=" -w " . $opt->{targetwidth};
+	$targetheightopt=" -h " . $opt->{targetheight};
+    } elsif (( not $opt->{targetwidth} eq "" ) && ( $opt->{targetheight} eq "" )) {
+	# scale to target width
+	$opt->{expandvideo} = "yes";
+	$targetwidthopt = " -w " . $opt->{targetwidth};
+	$targetheightopt = "";
+    } elsif (( $opt->{targetwidth} eq "" ) && ( not $opt->{targetheight} eq "" )) {
+	# scale to target height
+	$opt->{expandvideo} = "yes";
+	$targetwidthopt="";
+	$targetheightopt=" -h " . $opt->{targetheight};
+    }
+    if ( $opt->{expandvideo} eq "yes" ) {
+	$expandopt = "-e" ;
+    }
+#    my $videoparameterlog = sprintf "%s/%s_x264_encoding_parameters.txt", 
+#         $opt->{TMP}, $opt->{moviename};
+    my $videoparameterlog = catfile($opt->{TMP},  $opt->{moviename} . '_x264_encoding_parameters.txt');
+    my $command = sprintf "%s %s -f %s -p %s %s %s -W %s -H %s %s -B %s \"%s\" ",
+			   $progs->{choose_video_parameters},
+			   $expandopt,
+			   $opt->{SRC_FPS},
+			   $opt->{profile},
+			   $targetwidthopt,
+			   $targetheightopt,
+			   $opt->{SRC_WIDTH},
+			   $opt->{SRC_HEIGHT},
+			   $cropopts,
+			   $opt->{BITRATE},
+			   $videoparameterlog;
+    print $LOG $command . "\n";
+    system ($command);
+    if ( -1 == $? ) {
+	printf $LOG "external call to %s failed\n", $progs->{choose_video_parameters};
+	$opt->{x264_1stpassopts} = sprintf "subq=4:bframes=4:weight_b:pass=1:psnr:bitrate=%s:turbo=2:threads=auto",
+	$opt->{BITRATE};
+	$opt->{x264_2ndpassopts} = sprintf "subq=5:partitions=4x4:8x8dct:frameref=3:bframes=4:pass=2:psnr:bitrate=%s:threads=auto",
+	$opt->{BITRATE};
+    } else { 
+	open my $VIDOPT, '<', "$videoparameterlog" or die "Unable to open $videoparameterlog:$!\n";
+	my ($encopts) = grep (s/x264encoptions (.+)/$1/, <$VIDOPT> );
+	chomp $encopts;
+	unless ( $encopts eq "" ) {
+	    print $LOG  "using seleted preset " . $opt->{profile} . "\n";
+	    $opt->{x264_1stpassopts} = $encopts . ":pass=1:turbo=2";
+	    $opt->{x264_2ndpassopts} = $encopts . ":pass=2";
+	} else { 
+	    print $LOG  "encoder options by preset are empty. Using default settings.\n";
+	    $opt->{x264_1stpassopts} = sprintf "subq=4:bframes=4:weight_b:pass=1:psnr:bitrate=%s:turbo=2:threads=auto",
+	    $opt->{BITRATE};
+	    $opt->{x264_2ndpassopts} = sprintf "subq=5:partitions=4x4:8x8dct:frameref=3:bframes=4:pass=2:psnr:bitrate=%s:threads=auto",
+	    $opt->{BITRATE};
+	}
+	my ($geometryfilteroptions) = grep (s/vf_scale_expand_filter_chain (.+)/$1/, <$VIDOPT> );
+	chomp $geometryfilteroptions;
+	print $LOG "geometryfilteroptions " . $geometryfilteroptions . "\n";
+	unless ( $geometryfilteroptions eq "" ) {
+	    $opt->{noisereduction} = "yes";
+	    $opt->{SCALE1} = $geometryfilteroptions;
+	    $opt->{SCALE2} = "spp," . $geometryfilteroptions;
+	}
+    }
+}
+
+sub build_filter_chain ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my $progs = shift; 
+    # crop
+    unless ( $opt->{CROP} eq "" ) {
+	if ( $opt->{MENCODER_FILTERS} eq "" ) {
+	    $opt->{MENCODER_FILTERS} = "crop=" . $opt->{CROP};
+	} else {
+	    $opt->{MENCODER_FILTERS} = $opt->{MENCODER_FILTERS} . ",crop=" . $opt->{CROP};
+	}
+    }
+    # deinterlacing
+    if ( $opt->{interlaced} eq "yes" ) {
+	if ( $opt->{MENCODER_FILTERS} eq "" ) {
+	    $opt->{MENCODER_FILTERS} = "lavcdeint";
+	} else { 
+	    $opt->{MENCODER_FILTERS} = "lavcdeint," . $opt->{MENCODER_FILTERS};  
+	}
+    }      
+
+    unless ( $opt->{SCALE1} eq "" ) {
+	if ( $opt->{MENCODER_FILTERS} eq "" ) {
+	    $opt->{FILTER1} = "-vf " . $opt->{SCALE1};
+	    $opt->{FILTER2} = "-vf " . $opt->{SCALE2};
+	} else { 
+	    $opt->{FILTER1} = "-vf " . $opt->{SCALE1} . "," . $opt->{MENCODER_FILTERS};  
+	    $opt->{FILTER2} = "-vf " . $opt->{SCALE2} . "," . $opt->{MENCODER_FILTERS};  
+	}
+    } else {
+	# no scaling needed
+	unless ( $opt->{MENCODER_FILTERS} eq "" ) {
+	    $opt->{FILTER1} = " -vf " . $opt->{MENCODER_FILTERS}; 
+	    $opt->{FILTER2} = " -vf " . $opt->{MENCODER_FILTERS};
+	}
+    }
+
+    if ( $opt->{noisereduction} eq "yes" ) {
+	$opt->{FILTER2} = $opt->{FILTER2} . ",hqdn3d=2:1:2";
+    }      
+
+    print $LOG  "Using filterset: \n";
+    print $LOG  "common filters: " . $opt->{MENCODER_FILTERS} . "\n";
+    print $LOG  "first pass: " . $opt->{FILTER1} . "\n";
+    print $LOG  "second pass: " . $opt->{FILTER2} . "\n";
+}
+
+sub encode_video ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my $progs = shift; 
+    my $nosubs="";
+#   my $nice = "";
+    my $nice = "nice -n 10" unless ( $os =~ /MSWin.*/);
+    my $videoopts1st;
+    my $videoopts2nd;
+
+    if ( $opt->{subtitles} eq "yes" ) {
+	# skipping hardcoded subtitles, all subs will be available in matroska container
+	$nosubs = " -nosub ";
+    } 
+    my $outputfile = sprintf "%s/%s_tmp.avi", $opt->{TMP}, $opt->{moviename};
+    my $passlogfile = sprintf "%s/%s_2pass.log", $opt->{TMP}, $opt->{moviename};
+    if (length ($opt->{override_video_encoder}) == 0) {
+	$videoopts1st = sprintf "-ovc x264 -x264encopts %s -passlogfile %s ", 
+				 $opt->{x264_1stpassopts}, 
+				 $passlogfile, 
+				 $opt->{INPUT_FRAMERATE}, 
+				 $opt->{OUTPUT_FRAMERATE};
+	$videoopts2nd = sprintf "-ovc x264 -x264encopts %s -passlogfile %s ", 
+				 $opt->{x264_2ndpassopts}, 
+				 $passlogfile, 
+				 $opt->{INPUT_FRAMERATE}, 
+				 $opt->{OUTPUT_FRAMERATE};
+    }
+    else {
+	my $videoparams = $opt->{override_video_encoder};
+	my $firstpass;
+	my $secondpass;
+	print STDERR "user provided video encoding parameters: " . $opt->{encopts} . "\n" if $opt->{debug};
+	if ($opt->{override_video_encoder} =~ /-lavcopt/) {
+	    my $passlogfile = sprintf "%s/%s_2pass.log", $opt->{TMP}, $opt->{moviebase};
+	    $firstpass=":vpass=1 -passlogfile " . $passlogfile;
+	    $secondpass=":vpass=2 -passlogfile " . $passlogfile;      
+	} elsif ($opt->{override_video_encoder} =~ /-xvidopt/) {
+	    $firstpass=":pass=1";
+	    $secondpass=":pass=2";
+	} else {
+	    # setting something, but it is unlikely to work
+	    $firstpass=":pass=1";
+	    $secondpass=":pass=2";
+	}
+	$videoopts1st = sprintf "%s%s", $opt->{override_video_encoder}, $firstpass;
+	$videoopts2nd = sprintf "%s%s", $opt->{override_video_encoder}, $secondpass;
+    }
+
+    # first pass      
+    my $command = sprintf "%s %s %s %s %s %s %s %s %s -o \"%s\"", 
+			   $nice,
+			   $progs->{mencoder}, 
+			   $opt->{DEVICE}, 
+			   $opt->{AUDIO}, 
+			   $opt->{FILTER1}, 
+			   $nosubs, 
+			   $videoopts1st, 
+			   $opt->{audiocodec},
+			   $opt->{rawcommand}, 
+			   $outputfile ;
+    print $LOG $command . "\n";
+    system ($command);
+
+    # if encoding had problems, temporary file to not get renamed. Try recovering and saving as much as possible.    
+    if ( -f $passlogfile . ".temp" ) {
+	move ($passlogfile . ".temp", $passlogfile);
+	move ($passlogfile . ".mbtree.temp", $passlogfile . ".mbtree");
+    }
+
+    print $LOG "First encoding pass done\n";
+
+    # second pass
+    my $command = sprintf "%s %s %s %s %s %s %s %s %s -o \"%s\"", 
+			   $nice,
+			   $progs->{mencoder}, 
+			   $opt->{DEVICE}, 
+			   $opt->{AUDIO}, 
+			   $opt->{FILTER1}, 
+			   $nosubs, 
+			   $videoopts2nd, 
+			   $opt->{audiocodec}, 
+			   $opt->{rawcommand},
+			   $outputfile; 
+    print $LOG $command . "\n";
+    system ($command);
+    print $LOG "Second encoding pass done\n";
+}
+
+sub mux_streams ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my $workdir = shift;
+    my $progs = shift;
+    my $muxing_succeeded = 0;
+
+    unless ( $opt->{containerformat} eq "avi" ) {
+        print $LOG "Now muxing Output file\n";
+        # Chapter support
+        if (scalar(grep (/chapter/i, @mplayer_title_info)) > 0) {
+	    print $LOG "Now extracting chapter information\n";
+            &extract_chapters ($LOG, $opt, $opt->{TMP}, $opt->{moviename}, \@mplayer_title_info);
+        }
+#        &extract_chapters ($LOG, $opt, $opt->{TMP}, $opt->{moviename}, \@mplayer_title_info);
+
+        # Subtitle support
+        print STDERR "subtitles is " . $opt->{subtitles} . "\n" if $opt->{debug};
+        if ( $opt->{subtitles} eq "yes" ) {
+            print $LOG "Ripping subtitles\n";
+            &riptoh264_rip_subtitles ($LOG, $opt, $progs);
+            unless ( $opt->{sublist} eq "" ) {
+                $opt->{avi2mkv_subtitles} = " -S $opt->{sublist} ";
+            }
+            print $LOG  "Subtitle ripping ended\n";
+        }    
+
+        # force 16:9 display if source is anamorphic
+        $opt->{avi2mkv_widescreen} = "";
+        print STDERR "ASPECT is " . $opt->{ASPECT} . "\n" if $opt->{debug};
+        if (( $opt->{ASPECT} == 3 ) && ( $opt->{crop} eq "no" )) {
+            # anamorphic, force 16:9
+            $opt->{avi2mkv_widescreen} = " -w ";
+        }
+
+        # process external audio streams
+        print STDERR "singleaudio is " . $opt->{singleaudio} . "\n" if $opt->{debug};
+        if ( $opt->{singleaudio} eq "no" ) {
+            my $counter = 1;
+            foreach (@{$opt->{audioids}}) {
+                my $filename = sprintf "%s_%s.ac3", $opt->{moviename}, $_;
+                if (-f "$opt->{TMP}" . "/" . "$filename") {
+    #		$opt->{avi2mkv_secondaudioopts} = sprintf "%s --join_external_audio_file %s",
+    #		                                          $opt->{avi2mkv_secondaudioopts}, $filename;
+                    $opt->{avi2mkv_replaceinternalaudio} = sprintf "%s \"%s\"",
+                                                                    $opt->{avi2mkv_replaceinternalaudio}, $filename;
+                }
+                $counter++;
+            }
+        }
+        print $LOG "list of audio streams to use: $opt->{avi2mkv_replaceinternalaudio}\n";
+
+        my $filebase = sprintf "%s/%s",  $opt->{TMP}, $opt->{moviename};
+        unless ( -f "$filebase" . ".avi" ) {
+            move ($filebase . "_tmp.avi", $filebase . ".avi");
+            $opt->{avi2mkv_sourcefile} = $opt->{moviename} . ".avi";
+        } else {
+            $opt->{avi2mkv_sourcefile} = $opt->{moviename} . "_tmp.avi"
+        }
+        $opt->{avi2mkv_title} = "-t " . $opt->{moviename};
+        print STDERR "avi2mkv_sourcefile is " . $opt->{avi2mkv_sourcefile} . "\n" if $opt->{debug};
+        print STDERR "avi2mkv_title is " . $opt->{avi2mkv_title} . "\n" if $opt->{debug};
+
+        # passing parameters to avi2mkv 
+        print STDERR "containerformat is " . $opt->{containerformat} . "\n" if $opt->{debug};
+        given ($opt->{containerformat}) { 
+            when ("mp4") {$opt->{format}="--mp4mux";}
+            when ("ts")  {$opt->{format}="--tsmux";}
+            when ("ogm") {$opt->{format}="--ogmmux";}
+            default {        $opt->{format}="";}
+        }
+        print STDERR "audiotarget is " . $opt->{audiotarget} . "\n" if $opt->{debug};
+        given ($opt->{audiotarget}) { 
+            when("mp3")  {$opt->{audioconvert}="-mp3_audio";}
+            when("aac")  {$opt->{audioconvert}="-aac_audio";}
+            when("ogg")  {$opt->{audioconvert}="-ogg_audio";}
+            when("flac") {$opt->{audioconvert}="-flac_audio";}
+            when("ac3")  {$opt->{audioconvert}="-ac3_audio";}
+            default {        $opt->{audioconvert}="";}
+        }
+        my $passed_parameters= sprintf "%s %s %s %s %s %s %s",
+                                        $opt->{format},
+                                        $opt->{avi2mkv_pass_languages},
+                                        $opt->{audioconvert}, 
+                                        $opt->{abitrate}, 
+                                        $opt->{normalizeaudio},
+                                        $opt->{setaudiovolume}, 
+                                        $opt->{converttostereo};
+
+        print STDERR "passed_parameters is " . $passed_parameters . "\n" if $opt->{debug};
+        print $LOG "Calling avi2mkv to create output container\n";
+
+    #    my $command = sprintf "%s -p %s %s %s %s %s %s %s %s %s",
+        my $command = sprintf "%s -p %s %s %s %s %s %s --replace_internal_audio_stream \"%s\" %s ",
+                                $progs->{avi2mkv},
+                                $opt->{profile},
+                                $passed_parameters,
+                                $opt->{avi2mkv_title},
+                                $opt->{avi2mkv_widescreen},
+                                $opt->{avi2mkv_chapters},
+                                $opt->{avi2mkv_subtitles},
+                                $opt->{avi2mkv_sourcefile},
+                                $opt->{avi2mkv_replaceinternalaudio};
+        #    $opt->{avi2mkv_secondaudioopts},
+        #    $opt->{avi2mkv_sourcefile};
+        print STDERR "command is " . $command . "\n" if $opt->{debug};
+        print $LOG $command . "\n";
+        chdir $opt->{TMP};
+        system ($command);
+        if ( -1 == $? ) {
+            chdir $workdir; 
+            print $LOG "Call to external program avi2mkv failed. \n";
+        }
+        else {
+            $muxing_succeeded = 1;
+        }
+        chdir $workdir; 
+
+        if ( -f $filebase . ".mkv") {
+            move ($filebase . ".mkv", $opt->{OUTDIR});
+        }
+
+    } else { 
+        unless ( -f $opt->{OUTDIR} . "/" . $opt->{moviename} . ".avi" ) {
+            move ($opt->{TMP} . "/" . $opt->{moviename} . "_tmp.avi", $opt->{OUTDIR} . "/" . $opt->{moviename} . ".avi");
+            $muxing_succeeded = 1;
+        }
+    }
+    if ($muxing_succeeded) {
+        unless ($opt->{debug}) {
+            print $LOG "muxing succeeded. cleaning up temporary files.\n";
+            &clean_tmpdir($LOG, $opt->{TMP});
+        }
+    }
+}
+
+sub riptoh264_rip_subtitles ()
+{
+    my $LOG = shift; 
+    my $opt = shift;
+    my $progs = shift;
+
+    my @subids;
+    my @found;
+    my $substreams = 0;
+    my %usedlangs;
+    foreach my $language (@{$opt->{languages}}) {
+	my $twodigit = &find_twodigit_langcode ($language);
+	$usedlangs{$twodigit}++ unless ($twodigit eq "no_language_information");
+    }
+    unless ($opt->{process_all_subs} eq "yes") {
+	# processing just subtitles that have preferred language
+	for (my $iter = 0; $iter < @{$opt->{SUB_LANGUAGE}}; $iter++) {
+	    foreach my $twodigit (keys %usedlangs) {
+
+		print STDERR "2-digit code is $twodigit\n" if $opt->{debug};
+		print STDERR "stream language is " . @{$opt->{SUB_LANGUAGE}}[$iter] . "\n" if $opt->{debug};
+
+		if (@{$opt->{SUB_LANGUAGE}}[$iter] eq $twodigit) {
+		    print STDERR "found matching sub stream for language $twodigit with sub stream id " . @{$opt->{SUB_SID}}[$iter] . "\n" if $opt->{debug};
+		    push @subids, $iter;
+		    $substreams++;
+		}
+	    }
+	}
+    }
+    else {
+	# processing all subtitles
+	for (my $iter = 0; $iter < @{$opt->{SUB_LANGUAGE}}; $iter++) {
+	    push @subids, $iter;
+	}
+    }
+    foreach my $i (@subids) {
+	my $langcode = &find_threedigit_langcode (@{$opt->{SUB_LANGUAGE}}[$i]);
+	$langcode = "und" if ($langcode eq "");
+	my $subname = $opt->{moviename} . "_sid" . $opt->{SUB_SID}[$i];
+	if ( -f $subname . ".sub" ) {
+	    unlink $subname . ".sub";
+	}
+	if ( -f $subname . ".idx" ) {
+	    unlink $subname . ".idx";
+	}
+	my $command = sprintf "%s %s -nosound -ovc frameno -o $nulldevice -vobsubout \"%s\" -vobsuboutindex %s -sid %s",
+			       $progs->{mencoder},
+			       $opt->{DEVICE},
+			       $opt->{TMP} . "/" . $subname,
+			       $opt->{SUB_SID}[$i],
+			       $opt->{SUB_SID}[$i];
+	print $LOG $command . "\n";
+	system ($command);
+	unless ( $? == -1 ) {
+	    # subtitles hopefully sane, processing them
+	    unless ( $opt->{sublist} eq "" ) {
+		$opt->{sublist} = $opt->{sublist} . "," . $subname . ".idx:" . $langcode;
+	    } else {
+		$opt->{sublist} = $subname . ".idx:" . $langcode;
+	    }
+	}   
+    }
+}
+
+
+sub riptoh264_dump_device ()
+{
+    my $LOG = shift; 
+    my $opt = shift;
+    if ( $os =~ /MSWin.*/) {
+	print  "on Windows ripping to ISO first is not supported\n";
+    } else {
+	if ( -b $opt->{LSDEVICE}) {
+	    print   "Dumping $opt->{INPUT} to your hard drive...\n";
+	    my $command = sprintf "dd if=%s of=\"%s/%s.iso\" bs=2048 conv=noerror,sync 2>&1", 
+	                           $opt->{LSDEVICE},$opt->{TMP}, $opt->{moviename};
+	    print $LOG $command . "\n";
+	    system ($command);
+	    $opt->{LSDEVICE} = $opt->{TMP} . "/" . $opt->{moviename} . ".iso";
+	    $opt->{directory} = "yes";
+	}
+    }
+}
+
+# read config file if present 
+my $configfile = &check_config ();
+#print STDERR "config file is $configfile\n";
+if ($configfile) {
+    &read_config ($configfile, \@{$opt->{languages}}, $progs);
+   # getting values specific to bluray-info
+   open my $CONF, '<', $configfile or die "could not open config file $configfile for reading\n";
+   my @config = <$CONF>;
+   close $CONF;
+   $opt->{profile}          = &grep_config_value ("profile", \@config, $configfile); 
+   $opt->{containerformat}  = &grep_config_value ("containerformat", \@config, $configfile);
+   $opt->{debug}           = &grep_config_value ("debug", \@config, $configfile); 
+   $opt->{noisereduction}   = &grep_config_value ("riptoh264_noisereduction", \@config, $configfile); 
+   $opt->{crop}             = &grep_config_value ("riptoh264_crop", \@config, $configfile); 
+   $opt->{expandvideo}      = &grep_config_value ("riptoh264_expandvideo", \@config, $configfile); 
+   $opt->{expandif}         = &grep_config_value ("riptoh264_expandif", \@config, $configfile); 
+   $opt->{secondaudiofirst} = &grep_config_value ("riptoh264_secondaudiofirst", \@config, $configfile); 
+   $opt->{subtitles}        = &grep_config_value ("riptoh264_subtitles", \@config, $configfile); 
+   $opt->{ripall}           = &grep_config_value ("riptoh264_ripall", \@config, $configfile); 
+   $opt->{min_title_length} = &grep_config_value ("riptoh264_min_title_length", \@config, $configfile); 
+   $opt->{TMPPATH}          = &grep_config_value ("riptoh264_TMPPATH", \@config, $configfile); 
+   $opt->{OUTPUTPATH}       = &grep_config_value ("riptoh264_OUTPUTPATH", \@config, $configfile); 
+   $opt->{FORMAT}           = &grep_config_value ("riptoh264_FORMAT", \@config, $configfile); 
+   $opt->{BITRATE}          = &grep_config_value ("riptoh264_BITRATE", \@config, $configfile); 
+   $opt->{audiotarget}      = &grep_config_value ("riptoh264_audiotarget", \@config, $configfile); 
+   $opt->{singleaudio}      = &grep_config_value ("riptoh264_singleaudio", \@config, $configfile); 
+   $opt->{directory}        = &grep_config_value ("riptoh264_directory", \@config, $configfile); 
+   $opt->{TELECINE_METHOD}  = &grep_config_value ("riptoh264_TELECINE_METHOD", \@config, $configfile); 
+   $opt->{processallsubs}   = &grep_config_value ("riptoh264_processallsubs", \@config, $configfile); 
+   $opt->{override_video_encoder} = &grep_config_value ("riptoh264_override_video_encoder", \@config, $configfile); 
+   $opt->{rawcommand}       = &grep_config_value ("riptoh264_rawcommand", \@config, $configfile); 
+}
+$opt->{debug}            = ""  unless ($opt->{debug} eq "yes");
+$opt->{profile}          = "nq"  unless ($opt->{profile});
+$opt->{containerformat}  = "mkv" unless ($opt->{containerformat});
+$opt->{noisereduction}   = "no" unless ($opt->{noisereduction});
+$opt->{crop}             = "no" unless ($opt->{crop});
+$opt->{expandvideo}      = "no" unless ($opt->{expandvideo});
+$opt->{expandif}         = "no" unless ($opt->{expandif});
+$opt->{secondaudiofirst} = "no" unless ($opt->{secondaudiofirst});
+$opt->{subtitles}        = "no" unless ($opt->{subtitles});
+$opt->{ripall}           = "no" unless ($opt->{ripall});
+$opt->{min_title_length} = "120" unless ($opt->{min_title_length});
+$opt->{TMPPATH}          = "" unless ($opt->{TMPPATH});
+$opt->{OUTPUTPATH}       = "" unless ($opt->{OUTPUTPATH});
+$opt->{FORMAT}           = "PAL" unless ($opt->{FORMAT});
+$opt->{BITRATE}          = 1200 unless ($opt->{BITRATE});
+$opt->{audiotarget}      = "copy" unless ($opt->{audiotarget});
+$opt->{singleaudio}      = "no" unless ($opt->{singleaudio});
+$opt->{directory}        = "yes" unless ($opt->{directory});
+$opt->{TELECINE_METHOD}  = "25p telecined to 25i" unless ($opt->{TELECINE_METHOD});
+$opt->{processallsubs}   = "no" unless ($opt->{processallsubs});
+$opt->{rawcommand}       = ""    unless ($opt->{rawcommand});
+$opt->{override_video_encoder}     = ""  unless ($opt->{override_video_encoder});
+# parse command line arguments if present
+&init ($opt);
+
+my $workdir = cwd(); 
+
+print "starting options testing\n";
+# testing input for plausibility
+&test_options ($opt);
+
+if ( $opt->{ripall} eq "yes" ) {
+    printf  "Ripping all titles over %s seconds length\n", $opt->{min_title_length};
+    print  "These are the titles to process: " . $opt->{titlenum} . "\n";
+    my $DEVICE_SAV = $opt->{DEVICE};
+    # cut off title number
+    $DEVICE_SAV =~ s!/\d+$!/!;
+    my $moviename_sav = $opt->{moviename};
+    my $TMP_SAV = $opt->{TMP};
+    $opt->{titlenum} =~ s/^\s+//;
+    my @titlenum = split (/\s+/, $opt->{titlenum});
+    foreach my $TITLE (@titlenum) {
+	$opt->{TMP} = sprintf "%s_%03d", $TMP_SAV ,$TITLE;
+	if ( ! -d "$opt->{TMP}" ) {
+	    mkdir "$opt->{TMP}"
+	}
+	$opt->{DEVICE} = $DEVICE_SAV . $TITLE;
+	$opt->{TITLE} = $TITLE;
+	$opt->{moviename} = sprintf "%s_%03d", $moviename_sav ,$TITLE;
+	print  "Starting Processing for Title $TITLE. This can take a while. Please be patient.\n"; 
+	my $logfile = sprintf "%s/%s_mencoder.log", $opt->{TMP}, $opt->{moviename};
+	if ( -f $logfile) {
+	    print  "logfile already exists, removing it\n";
+	    unlink $logfile;
+	}
+	open my $LOG, '>', $logfile or die "Unable to open $logfile:$!\n";
+	# get all necessary information for further processing
+	if (&get_dvd_info ($LOG, $opt, $progs)) {
+	    # testing aborted, skip to next title
+	    next;
+	}
+
+	if ( $opt->{info} eq "yes" ) {
+	    # only dvd info required, exiting
+	    exit 0; 
+	}
+
+	# set and rip audio to mux into Container later
+	&process_audio ($LOG, $opt, $progs);
+
+	# build video filter chain    
+	&process_video_settings ($LOG, $opt, $progs);
+
+	&choose_encoding_profile ($LOG, $opt, $progs);
+
+	&build_filter_chain ($LOG, $opt, $progs);
+
+	# do the actual encoding
+	&encode_video ($LOG, $opt, $progs);
+
+	#muxing   
+	&mux_streams ($LOG, $opt, $workdir, $progs);
+    }
+} else {
+    print  "Starting Processing. This can take a while. Please be patient. \n";
+    my $logfile = sprintf "%s/%s_mencoder.log", $opt->{TMP}, $opt->{moviename};
+    if ( -f $logfile) {
+	print  "logfile already exists, removing it\n";
+	unlink $logfile;
+    }
+    open my $LOG, '>', $logfile or die "Unable to open $logfile:$!\n";
+    # get all necessary information for further processing
+    &get_dvd_info ($LOG, $opt, $progs);
+
+    if ( $opt->{info} eq "yes" ) {
+	# only dvd info required, exiting
+	exit 0; 
+    }
+
+    # set and rip audio to mux into Container later
+    &process_audio ($LOG, $opt, $progs);
+
+    # build video filter chain    
+    &process_video_settings ($LOG, $opt, $progs);
+
+    &choose_encoding_profile ($LOG, $opt, $progs);
+
+    &build_filter_chain ($LOG, $opt, $progs);
+
+    # do the actual encoding
+    &encode_video ($LOG, $opt, $progs);
+
+    #muxing   
+    &mux_streams ($LOG, $opt, $workdir, $progs);
+}
+
+exit 0;

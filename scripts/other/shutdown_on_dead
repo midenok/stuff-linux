@@ -1,0 +1,93 @@
+#!/bin/bash
+# set -x
+SLEEP_INTERVAL=2
+MAX_LOOPS=2
+
+declare -a dead_pids prev_pids stored_pids
+
+filter_stored()
+{
+    stored_pids2=(${stored_pids[@]})
+    unset stored_pids
+    i=0
+    while [ -n "$stored_pids2" ] && [ $i -lt ${#stored_pids2[@]} ]
+    do
+	j=0
+	while [ -n "$dead_pids" ] && [ $j -lt ${#dead_pids[@]} ]
+	do
+	    if [ ${stored_pids2[$i]} -eq ${dead_pids[$j]} ]
+	    then
+		stored_pids[${#stored_pids[@]}]=${dead_pids[$j]}
+		unset dead_pids[$j]
+		dead_pids=("${dead_pids[@]}")
+	    else
+		j=$((j+1))
+	    fi
+	done
+	i=$((i+1))
+    done
+}
+
+store_matching()
+{
+    filter_stored
+    i=0
+    while [ $i -lt ${#prev_pids[@]} ]
+    do
+	j=0
+	while [ -n "$dead_pids" ] && [ $j -lt ${#dead_pids[@]} ]
+	do
+	    if [ ${prev_pids[$i]} -eq ${dead_pids[$j]} ]
+	    then
+		stored_pids[${#stored_pids[@]}]=${dead_pids[$j]}
+		unset dead_pids[$j]
+		dead_pids=("${dead_pids[@]}")
+	    else
+		j=$((j+1))
+	    fi
+	done
+	i=$((i+1))
+    done
+    echo "Dead: ${dead_pids[@]}"
+    echo "Prev: ${prev_pids[@]}"
+    echo "Stored: ${stored_pids[@]}"
+}
+
+kill_stored()
+{
+    i=0
+    while [ $i -lt ${#stored_pids[@]} ]
+    do
+	echo Killing ${stored_pids[$i]}
+	kill -9 ${stored_pids[$i]}
+	i=$((i+1))
+    done
+}
+
+loops=0
+while [ $loops -lt $MAX_LOOPS ]
+do
+    dead_pids=(`ps haxo pid,stat|grep D|sed 's/^ *\([[:digit:]]\+\) .\+/\1/'|xargs echo`)
+    [ -z "$dead_pids" ] && break
+
+    if [ -n "$prev_pids" ]
+    then
+	store_matching
+	if [ -z "$dead_pids" ]
+	then
+	    break
+	fi
+    fi
+
+    prev_pids=("${dead_pids[@]}")
+    sleep $SLEEP_INTERVAL
+    loops=$((loops+1))
+done
+
+if [ -n "$stored_pids" ]
+then
+    /sbin/poweroff
+    exit 1
+fi
+
+#kill_stored

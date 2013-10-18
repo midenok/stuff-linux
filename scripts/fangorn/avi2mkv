@@ -1,0 +1,2351 @@
+#!/usr/bin/perl
+# avi2mkv
+# conveniently transfer movies from AVI container (.avi) (or any other container readable by mkvmerge)
+# to Matroska Container. Also offers neat features like adding additional audio track from external file,
+# reversing audio tracks in output file, delaying audio tracks, correcting anamorphic video to display correctly, ...
+#
+# Depends on: toolbox_fangorn (version 0.1.0 or newer) my own. get it at http://fangornsrealm.eu
+#             mplayer (with support for libmp3lame if audio conversion to MP3 is intended) (for filetype detection and audio conversion)
+#             ffmpeg (for filetype detection)
+#             mencoder (part of mplayer) (for stream extraction)
+#             mkvmerge (version 2.9.6 or newer) (part of mkvtoolnix for matroska support),
+#             MP4Box (part of gpac, version 0.4.5 or higher preferred) (for muxing to MP4 container and raw mode)
+#             tsMuxeR (for muxing to MPEG Transport Stream  container)
+#             ogmmerge (part of ogmtools) (for muxing to OGM container
+#         for converting audio under linux/Mac OS X    
+#             neroAacEnc (for recoding audio streams to AAC)
+#             oggenc (part of ogmtools) (for recoding audio streams to Ogg Vorbis)
+#             flac (for recoding audio streams to FLAC)
+#         for converting audio under Windows
+#             eac3to
+#
+# Author: fangorn (at forums.gentoo.org)
+#
+# Licence: GPL (dependencies might differ), use at your own risk, no warranties.
+#
+# Requests: If you can think of another cool feature, don't hesitate to contact me. 
+#           Also you can look for updated versions at
+#           http://forums.gentoo.org/viewtopic-t-744041-start-0-postdays-0-postorder-asc-highlight-.html
+#           or at the project page at http://fangornsrealm.eu
+#
+# Feature List:
+# - copy video and audio from AVI container sources (and any other format mkvmerge supports) and write them to Matroska container
+# - use up to two audio streams and tag them with prede}ned languages 
+#   (including options to specify stream order in the output and language of the input streams)
+# - join source video/audio with an external audio stream or replace internal audio with up to two external audio streams 
+# - join multiple seperate AVI source files into one file before muxing
+# - manually adjust start point of audio streams if too early or late
+# 20090705 
+# - automatic source video aspect detection
+# 20091017 
+# - optionally mux subtitles  parts to mkvmerge (in case an option is not yet supported)
+# 20091130 
+# - optionally mux to MP4 container (using MP4Box)
+# - optionally mux to MPEG Transport Stream containers (using tsMuxeR)
+# - automacic recoding of audio streams unsupported by selected preset/hardware player
+# - automatic choice of sensible container format and audio codec if selection is unsuitable for selected preset/hardware player
+#            A lot of these changes were inspired by h264enc, where I also copied the profile handling and other parts.
+#            Thanks to the author(s) of h264enc for providing this code. I would not even have started thinking about
+#            doing such massive coding from scratch. We are nearing version 2.0.0, when the name avi2mkv finally has 
+#            nothing to do with the featureset of the program anymore. ;-) 
+# 20100206 
+# - optionally mux into OGM container
+# 20100313 
+# - chapter support for TS container
+# 20100411
+# - audio conversion is now also available for Matroska container
+# - uses external config file
+# - optionally specify languages on the command line
+# - process as many audio streams as languages are specified
+# - join multiple external audio sources
+# - replace internal audio with multiple external audio sources
+# - if there are multiple audio tracks in source use language settings if available to determine correct streams
+# - optionally use all internal audio streams when joining external audio 
+#   to a maximum of the number of defined languages minus the count of external audio files
+#   (default: use the first (matching if language information is available) audio stream only)
+# - specify on command line which internal stream(s) to use (-aid) when joining external audio
+# - if source is Matroska and has subtitles, chapters or tags, transfer them to the target matroska container
+#
+# ToDo: 
+# - accept source files not in the working directory
+# - add optional automatism to convert E-AC3 to AC3
+# - add option for preformatted commands to all muxers
+# - add audio processing to eac3to conversion
+# - add subtitle support for TS container
+# - check subtitle format against container format and convert if necessary
+# - add subtitle usage if input container has it
+# - add chapter usage if input container has it
+# 
+# Known Issues: 
+#               - wmv sources do not work
+#               - the stretching function does not work as expected (aka. correcting audio playtimes)
+#               - sources with multiple audio streams always get transfered first two audio streams,
+#                 regardless if you specify an external second audio stream!
+#                 In this case, extract the streams you want and specify two external streams to replace 
+#                 the internal ones using the -i option!
+#
+# Changelog:
+# 
+# 20091130 
+#          rewritten option parsing to support long options
+#          modularized and reordered old code to be more supportable
+# 20100206 
+#          activated container checks when a preset is speci}ed.
+#          fixed audio conversion from avi container source
+# 20100314
+#          rewritten the code in Perl
+#          fixed muxing of coverart to Matroska container
+#          fixed ogm muxing when no chapter file is present
+#          fixed the feature to use pan / channelmapping options
+#          audio encoding on windows platforms is dependent on eac3to
+#          now is dependent on toolbox-fangorn (version 0.1.0 or newer)
+# 20100425
+#          fixed subtitle muxing
+# 20100431
+#          fixed audio handling
+# 20100529
+#          fixed bugs in configuration file handling
+#          fixed a bug in external audio file handling
+#          fixed dependency on mplayer/ffmpeg interactive language setting
+#          fixed unclean programming style in several positions
+# 20100615
+#          fixed a bug in audio stream numbering
+#          fixed problems in audio handling logic
+# 20110113
+#          removed dependency on avimerge (from the transcode package)
+# 20110703 
+#          beginning support for filenames containing whitespace and other non-filename characters
+#          (not well tested for other things than Matroska and ISO MPEG4 container formats)
+#               new order of parameters in choose_video_parameters, you need to use following versions of the other tools
+#                   menc                     3.1.0 or newer
+#                   riptoh264                2.1.0 or newer
+#                   blu2mkv                  1.1.0 or newer
+#                   avi2mkv                  2.2.0 or newer
+#                   toolbox_fangorn          0.3.4 or newer
+#                   choose_video_parameters  0.2.6 or newer
+# 20110814
+#          beginning support for windows operating systems. Basic operations (avi to mkv) are tested and working.
+# 20110828
+#          fixed batch mode for multiple audio streams
+#          fixed mp4 muxing for multiple audio streams
+#          fixed problems with TS muxing when audio is copied
+#          added --copy_audio and --mkvmux to override any user settings in batch mode
+# 20110903
+#          windows support tested
+#          now depending on toolbox_fangorn.pl version 0.4.0 or newer
+# 201109017    
+#          generalized the toolbox_file loading
+#          (the user does not have to edit the program any more)
+#
+
+my $Versionnumber = "3.0.1";
+my $os = $^O;                 # automatic OS detection, do not change!
+my $toolbox;
+my $nulldevice;
+
+#####################################################################################################
+# Settings to be edited by the user                                                                 #
+#####################################################################################################
+# Paths to necessary programs. If your's differ, adjust.
+# this one is needed to be correct. Else everything will fail.
+BEGIN {
+    my $os2 = $^O;
+    if ($os2 =~ m/MSWin/) {
+        push @INC, "c:/fangorn/";
+	$toolbox = "toolbox_fangorn.pl";
+    } else {
+        push @INC, "/usr/local/bin";
+	my $login = getlogin || getpwuid($<);
+        push @INC, "/home/$login/bin" if ($login);
+        push @INC, "/usr/bin";
+	$toolbox = "toolbox_fangorn";
+    }    
+}
+
+#####################################################################################################
+# Default settings (function may break if changed)                                                  #
+#####################################################################################################
+my @mkvmerge_info;
+my @mplayer_info;
+my @audiostreams;
+my @needsprocessing;
+my @audiocodec;
+my @detectaud;
+my @channelmap;
+my @CHANNELS;
+my @AUDIOFILENAME;
+my @externalaudio;
+my @audioopts;
+my @languages;
+my @internalaudiostreams;
+my $progs = {};
+my $opt = {
+    chapter => "",
+    delay => "0",
+    aspect => "",
+    audiodelay => "",
+    profile => "nq",                  # using a default preset that does not have any restrictions
+    reverse => "no",                  # reverse order of audio streams (language settings are glued to the input streams)
+    stretch => "" ,                   #
+    joinavis => "no"  ,               # give multiple AVI source files and join them together before muxing
+    alternate_muxing => "no" ,        # mux raw streams instead of container source file
+    containerformat => "mkv" ,        # mux to Matroska by default
+    audiotarget => "copy",            # copy audio streams by default
+    replaceinternal => "no" ,         # drop audio stream(s) in source and use only additional audio streams
+    extractpartly => "",              #
+    rawcommand => "" ,                # preformatted mkvmerge commands not yet supported by avi2mkv
+    muxfiles => "",                   # commands for additional files to mux
+    subtitlelist => "" ,              # list of subtitle.idx files to mux
+    abitrate => "" ,                  # bitrate in kBit/s for recoding audio streams
+    useallinternalaudio => "no",
+    recodeaudio => "no",
+    reportfilename => "no",
+    MP4HINT => "",
+    setaudiovolume => "",
+    normalizeaudio => "no",
+    usestereo => "no",
+    externalencoder => "no",
+    coverpicture => "",
+    pan => "",
+    acodec => "",
+    afilters => "",
+    neroaacbr => "",
+    aacprof => "",
+    AACTYPE => "",
+    ENCODER => "",
+    vorbq => "",
+    fifofile => "",
+    moviename  =>  "",
+    moviebase  =>  "",
+    path => "",
+    suffix => "",
+    movietitle  =>  "",               # title of the movie
+    file  =>  "",                     # inputfile
+    sourcefilecount => 1 ,            # number of source files to process
+    videostream  =>  "",
+    languages  =>  \@languages,
+    chapters => "",
+    SRC_HEIGHT => "" ,
+    SRC_WIDTH => "" ,
+    SRC_FPS => "",
+    MP4SUBS => "",
+    MKVCOVER => "",
+    needsprocessing => \@needsprocessing,
+    audiocodec => \@audiocodec,
+    detectaud => \@detectaud,
+    channelmap => \@channelmap,
+    CHANNELS => \@CHANNELS,
+    AUDIOFILENAME => \@AUDIOFILENAME,
+    audioopts => \@audioopts,
+    externalaudio => \@externalaudio,
+    internalaudiostreams => \@internalaudiostreams,      
+};
+
+require ($toolbox);
+
+
+
+#
+# Globals
+#
+
+use warnings;
+use strict;
+use feature 'switch';
+use Cwd;
+use File::Basename;
+use File::Copy;
+use File::Spec::Functions;
+use Data::Dumper;
+$Data::Dumper::Purity = 1;
+use POSIX qw(locale_h);
+my $old_locale = setlocale(LC_CTYPE);
+setlocale(LC_CTYPE, "C");
+
+
+#
+# Message about this program and how to use it
+#
+
+sub help_text ()
+{
+    my $prog = $0; 
+    if ( $os =~ /MSWin.*/) {
+        $prog =~ s/^.*\\//;
+    } else {
+        $prog =~ s{^.*/}{};
+    }
+    print STDERR << "EOF";
+
+$prog Version  $Versionnumber
+
+Program to create Matroska container from any format readable by mkvmerge. Also provides some
+format specific video and audio stream adjustments like aspect ratio, audio stream order,
+synchronization.
+
+Usage: $prog [Options] moviename <file2 [...]>
+    Valid Options are:
+
+    Audio processing:
+    --first_audio_is_second_language|-e                 
+        source first audiostream is of the language defined second, and vice versa -> reverse language order in output
+    --reverse_audio_streams|-r
+        reverse audiostream order in output file
+    --language|-l <3-digit languagecode>
+        override language definitions in script / config file 
+        issue multiple times for multiple languages!
+
+        Caution: This has to be set before specifying external audio streams!!!
+
+        will be used in the order given on the command line
+        example: english and german audio and english audio commentary would be
+                 --language eng --language ger --language eng
+    --join_external_audio_file|-j <file>          
+        join source with external audio stream(s) from <file>
+        issue multiple times to join multiple external audio files!
+                       (can handle as many external audio streams as languages are defined)
+    --internal_audio_stream
+        specify audio stream id of internal audio stream for muxing when joining external audio file
+        issue multiple times to specify more than one audio stream
+    --use_all_internal_audio
+        when joining external audio streams, use all internal audio streams first
+        (default: use first (matching if information is avaliable) internal audio stream only)
+    --replace_internal_audio_stream|-i <file2 [file3]...> 
+        replace source audio stream with stream(s) from external file(s)
+                       (can handle as many external audio streams as languages are defined)
+    --audio_is_after_video|-a <miliseconds>   
+        audio is after picture, so take a delay of -<miliseconds>
+    --audio_is_before_video|-b <miliseconds>   
+        audio is before picture, so take a delay of +<miliseconds>
+    --audio_stretch_factor|-s <factor>        
+        stretch/shorten audio track(s) by <factor> (decimal or x/y format)
+
+    Caution: Delay and Stretch factor apply to all audio tracks, so if you only
+             want to adjust one track, use subsequent runs of avi2mkv!
+
+    Video processing:              
+    --video_aspect_widescreen|-w  
+        force display of anamorphic video to widescreen
+    --video_aspect_ratio|-x <aspectratio>   
+        give discrete ascpect ratio to write to file 
+        for Matroska containter in decimal or x/y format (1.33 or 4/3)
+        for ISO MP4 container in the format width:height (16:9 or 1024:576)
+
+    Container features:  
+    --title|-t <movietitle>    
+        specify different movie title to save to mkv [Default: moviename]
+    --chapters|-c <chapters>      
+        read chapter marks from file (for example generated by dvdxchap or mkvextract)
+    --subtitlelist|-S <file:lang<,file:lang,...>> 
+        a commaseperated list of subtitle files and according language code (like eng or ger)
+    --add_cover_art|--ca 
+        set a picture (jpeg or png format) as cover art 
+        (only works for Matroska container atm.)
+
+    Special modes:
+    --debug|-d
+        Debug mode (does not delete temporary files)
+    --join_avis|-J                 
+        join multiple movies <moviename file2 [...]> together 
+        (only works with .avi containers as input)
+    --use_raw_mode_muxing|-y                 
+        raw stream method. Extract all streams and join them back again.
+                       This is for extreme cases that do not sync up correct otherwise.
+    --rawcommand|-C <commandlist>   
+        pass raw preformated commands to mkvmerge
+        (Obviously only works when muxing Matroska files)
+
+
+    --help|-h
+        display this help text
+
+    The rest of the options is intended to changing the default behaviour concerning output container and 
+    converting audio streams
+
+    WARNING: The procedure for audio recoding and muxing is absolutely braindead 
+    concerning temporary harddisc space usage and processing time!
+    It may temporary fill up your disk space up to five times the original size and take quite a while.
+    But it works the most stable of the procedures that I could think of. 
+
+    --mkvmux|-mkv
+        Mux to Matroska Container (default)
+    --mp4mux|-mp4
+        Mux to ISO MP4 instead 
+    --mp4_hinting
+        Hint the MP4 file for RTP/RTSP streaming sessions
+    --tsmux|-ts
+        Mux to MPEG Transport stream (TS/AVCHD/BluRay) instead of Matroska Container
+    --ogmmux|-ogm
+        Mux to OGM instead of Matroska Container
+    --copy_audio|-ac
+        copy audio streams to container (default)
+    --mp3_audio|-a3
+        encode audio streams to MPEG1 Layer 3 (MP3) audio
+    --aac_audio|-aa
+        encode audio streams to AAC 
+    --ogg_audio|-ao
+        encode audio streams to OGG Vorbis
+    --flac_audio|-af
+        encode audio streams to FLAC
+    --ac3_audio|-aac3
+        encode audio streams to AC3
+    --audio_bitrate|-ab
+        bitrate for audio encoding in kBit/s
+    --audio_normalize|-an
+        normalize audio 
+    --audio_volume|-av <volume>
+        Audio volume in dB [-200 to 60 - default is 5]        
+    --audio_panning_matrix|-ap
+        panning matrix for audio stream conversion. If you dont know what that is, dont bother!
+    --audio_channel_matrix|-ap
+        channel mapping matrix for audio streams. If you dont know what that is, dont bother!
+    --audio_twochannel|-a2
+        force conversion to two channel stereo even if container support multi channel
+    --x264_encoding_preset|-p
+        x264 encoding options preset used for encoding the video stream
+EOF
+    exit 0;
+}
+
+#
+# Command line options processing
+#
+sub init()
+{
+    my $opt = shift;
+    my $languages_cleared = "no";
+    use Getopt::Long qw(:config no_ignore_case);
+    GetOptions( "help|h"  =>  sub {$opt->{help} = 1}, 
+        "debug|d"  =>  sub {$opt->{debug} = 1; print STDERR "switching to debug mode\n";}, 
+        "title|t=s"  =>  sub {$opt->{movietitle} = $_[1]; print STDERR "movie title is " . $opt->{movietitle} . "\n";},
+        "mkvmux|mkv"  =>   sub{$opt->{containerformat} = "mkv";},
+        "tsmux|ts"  =>   sub{$opt->{containerformat} = "ts";},
+        "ogmmux|ogm"  =>   sub{$opt->{containerformat} = "ogm";},
+        "mp4mux|mp4"  =>   sub{$opt->{containerformat} = "mp4";},
+        "first_audio_is_second_language|e"  =>  sub {
+            my $temp = ${$opt->{languages}[0]};
+            ${$opt->{languages}[0]} = ${$opt->{languages}[1]};
+            ${$opt->{languages}[1]} = $temp;
+        },
+        "reverse_audio_streams|r"  =>  sub {$opt->{reverse} = "yes";},
+        "replace_internal_audio_stream|i"  =>  sub {$opt->{replaceinternal} = "yes";},
+        "copy_audio|ac"  =>  sub {$opt->{recodeaudio}="yes";$opt->{audiotarget}="copy";},
+        "mp3_audio|a3"  =>  sub {$opt->{recodeaudio}="yes";$opt->{audiotarget}="mp3";},
+        "aac_audio|aa"  =>  sub {$opt->{recodeaudio}="yes";$opt->{audiotarget}="aac";},
+        "ogg_audio|ao"  =>  sub {$opt->{recodeaudio}="yes";$opt->{audiotarget}="ogg";},
+        "flac_audio|af"  =>  sub {$opt->{recodeaudio}="yes";$opt->{audiotarget}="flac";},
+        "ac3_audio|aac3"  =>  sub {$opt->{recodeaudio}="yes";$opt->{audiotarget}="ac3";},
+        "audio_bitrate|ab=s"  =>  sub {$opt->{recodeaudio}="yes";$opt->{abitrate} = $_[1] ;},
+        "audio_normalize|an"  =>  sub {$opt->{normalizeaudio}="yes";},
+        "audio_volume|av=s"  =>  sub {$opt->{normalizeaudio}="yes";$opt->{setaudiovolume} = $_[1]  ;},
+        "audio_panning_matrix|ap=s"  =>  sub {$opt->{recodeaudio}="yes";$opt->{pan} = $_[1]  ;},
+        "audio_channel_matrix|ac=s"  =>  sub {$opt->{recodeaudio}="yes";$opt->{channels} = $_[1]  ;},
+        "audio_twochannel|a2"  =>  sub {$opt->{usestereo}="yes";},
+        "language|l=s" => sub {if (($_[1] =~ m/^\w{3}$/) && (&find_language($_[1]))) {
+                print STDERR "using language $_[1] instead of defaults\n";
+                if ($languages_cleared eq "no") {
+                    for (my $i = 0; $i < @{$opt->{languages}}; $i++) {
+                        delete ${$opt->{languages}}[$i]; 
+                    }
+                    $languages_cleared = "yes";
+                }
+                push (@{$opt->{languages}}, $_[1]);
+            }
+        },
+        "use_all_internal_audio"  => sub{$opt->{useallinternalaudio} = "yes";},
+        "internal_audio_stream=s" => sub {push (@{$opt->{internalaudiostreams}}, $_[1]);},
+        "join_external_audio_file|j=s"  =>  sub {print STDERR "number of languages is " . scalar(@{$opt->{languages}}) . "\n" if $opt->{debug};
+            print STDERR "number of external audio files is " . scalar(@{$opt->{externalaudio}}) . "\n" if $opt->{debug};
+            if (-f $_[1]) {
+                push (@{$opt->{externalaudio}}, $_[1]);
+                $opt->{sourcefilecount}++;
+                printf "joining external audio file $_[1] to source\n" if ($opt->{debug});
+            }
+        },
+        "chapters|c=s"  =>  sub {$opt->{chapters} = $_[1]  ;},
+        "rawcommand|C=s"  =>  sub {$opt->{rawcommand} = $_[1]  ;},
+        "subtitlelist|S=s"  =>  sub {$opt->{subtitlelist} = $_[1]  ;},
+        "add_cover_art|ca=s"  =>  sub {$opt->{coverpicture} = $_[1] if (-f $_[1]) ;},
+        "audio_is_after_video|a=i"  =>  sub {$opt->{delay} = $_[1] ; $opt->{delay} = "-" . $opt->{delay};},
+        "audio_is_before_video|b=i"  =>  sub {$opt->{delay} = $_[1]  ;},
+        "audio_stretch_factor|s=s"  =>  sub {$opt->{stretch} = $_[1]  ;},
+        "use_raw_mode_muxing|y"  =>  sub {$opt->{alternate_muxing}="yes";},
+        "x264_encoding_preset|p=s"  =>  sub {$opt->{profile} = $_[1]  ;},
+        "mp4_hinting"  =>  sub {$opt->{containerformat}="mp4";$opt->{mp4hint}="yes";},
+        "video_aspect_widescreen|w"  =>  sub {$opt->{aspect}="widescreen";},
+        "video_aspect_ratio|x=s"  =>  sub {$opt->{aspect} = $_[1]  ;},
+        "join_avis|J"  =>  sub {$opt->{joinavis}="yes";},
+        "report_filename" => sub {$opt->{reportfilename} = "yes";},
+    ) or help_text();
+
+    &help_text () if ($opt->{help}); 
+    unless ( -f $progs->{mplayer} ) {
+        print STDERR "mplayer not available in path " . $progs->{mplayer} . ". Please correct this.\n";
+        exit 1;
+    }
+    unless ( -f $progs->{mencoder} ) {
+        print STDERR "mencoder not available in path " . $progs->{mencoder} . ". Please correct this.\n";
+        exit 1;
+    }
+    unless ( -f $progs->{ffmpeg} ) {
+        print STDERR "ffmpeg not available in path " . $progs->{ffmpeg} . ". Please correct this.\n";
+        exit 1;
+    }
+}
+
+sub test_options ()
+{
+    my @audiostreams;
+    my $opt = shift;
+    unless ( defined $ARGV[0]) {
+        &help_text ();
+        exit 1;
+    }
+
+    unless ( -f $ARGV[0] ) {
+        print STDERR "Please specify an existing file as input\n";
+        exit 1;
+    } else {
+        $opt->{file} = shift @ARGV;
+        print STDERR "using $opt->{file} as source\n" if $opt->{debug};
+        ($opt->{moviebase}, $opt->{path}, $opt->{suffix}) = fileparse($opt->{file},qr{\.\w+});
+        $opt->{movietitle} = $opt->{moviebase} unless ($opt->{movietitle});
+        if ($opt->{reportfilename} eq "yes") {
+             $opt->{moviename} = $opt->{moviebase} . "_avi2mkv_batchmode.mkv";
+	} else {
+            $opt->{moviename} = $opt->{moviebase} . ".mkv";
+	}
+        if ( -f $opt->{moviename} ) {
+            # file already exists, using other filename.
+            $opt->{moviename} = $opt->{moviename} . ".mkv";
+        }
+        if ( $opt->{joinavis} eq "yes" ) {
+            # merging avis first 
+            unless ( defined $ARGV[0] ) {
+                &help_text ();
+                exit;
+            }
+            unless ( -f $ARGV[0] ) {
+                &help_text () ;
+                exit;
+            }
+            my $arguments = "-forceidx -ovc copy -oac copy -o " . $opt->{file} . "_merged.avi $opt->{file} "; 
+            foreach (@ARGV) {
+                if (-f $_) {
+                    $arguments = $arguments . " " . $_;
+                }
+            }
+            my $ret = system ($progs->{mencoder}, $arguments);
+            if ( $ret > 0 ) {
+                print STDERR "Merging of videos failed. This only works for .avi with same parameters. Exiting.\n";
+                exit 1;
+            }
+            $opt->{file} = $opt->{file} . "_merged.avi";
+        }
+    }
+    my $logfile = ""; 
+    if ($opt->{reportfilename} eq "yes") {
+	$logfile = $opt->{moviebase} . "_avi2mkv_batchmode_command.log";
+    } else {
+        $logfile = $opt->{moviebase} . "_avi2mkv_command.log";
+    }
+    open my $LOG, '>', $logfile or die "Unable to open $logfile:$!\n";
+    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)=localtime(time);
+    printf $LOG "Logfile created at %4d-%02d-%02d %02d:%02d:%02d\n",$year+1900,$mon+1,$mday,$hour,$min,$sec;
+
+    print $LOG "dumping necessary information listings\n";
+    my $command = sprintf "%s  -i \"%s\"  2>&1", 
+	                       $progs->{mkvmerge}, $opt->{file};
+    print $LOG  $command . "\n";
+    @mkvmerge_info = `$command`;
+    $command = sprintf "%s \"%s\" -identify -frames 0 -vc null -vo null -ao null -nocache 2>&1", 
+	                       $progs->{mplayer}, $opt->{file};
+    print $LOG  $command . "\n";
+    @mplayer_info  = `$command`;
+#    print STDERR Dumper( @mkvmerge_info) if ($opt->{debug});
+#    print STDERR Dumper( @mplayer_info) if ($opt->{debug});
+
+    get_movie_parameters ($opt, \@mplayer_info);
+
+    if ( $opt->{movietitle} eq "" ) {
+        $opt->{movietitle} = $opt->{moviebase};
+    }
+    ($opt->{video_stream}) = grep (s/\s*Track\s+ID\s+(\d+):\s+video.*/$1/, @mkvmerge_info );
+    chomp $opt->{video_stream};
+    print  "video stream is $opt->{video_stream}\n" if ($opt->{debug});
+    (@audiostreams) = grep (s/\s*Track\s+ID\s+(\d+):\s+audio.*/$1/, @mkvmerge_info );
+    for (my $i = 0; $i < @audiostreams ; $i++) {
+        chomp $audiostreams[$i];
+    }
+    print  "audio streams are " . join(' ', @audiostreams) . "\n" if ($opt->{debug});
+    unless ( $audiostreams[0] ) {
+        $audiostreams[0] = 1;
+    }
+    $opt->{audiostreams} = \@audiostreams;
+    unless ( $opt->{video_stream} ) {
+        $opt->{video_stream} = 0;
+    }
+    if ( $opt->{replaceinternal} eq "yes" ) {
+        if (@externalaudio > 0) {
+            print STDERR "join_external_audio and replace_internal_audio are not allowed at the same time\n"; 
+            exit 1;
+        }
+        foreach (@ARGV) {
+            if (( $_ ) && ( -f $_ ) && (@languages > @externalaudio)) {
+                push (@externalaudio, $_);
+                $opt->{sourcefilecount}++;
+            } elsif ($opt->{sourcefilecount} == 1) {
+                print STDERR "You need to specify at least one external audio file to replace internal audio\n";
+                exit 1;
+            } elsif (( $_ ) && ( -f $_ ) && (@languages == @externalaudio)) {
+                print  "you can only specify as many external audio files to join as languages are defined\n";
+                print  "ignoring external audio file $_\n";
+            }
+        }
+    }
+    $opt->{externalaudio} = \@externalaudio;
+    $opt->{languages} = \@languages;
+    printf  "Movie %s with title %s has a geometry of %s x %s and a framerate of %s\n", 
+             $opt->{file}, 
+	     $opt->{movietitle}, 
+	     $opt->{SRC_WIDTH}, 
+	     $opt->{SRC_HEIGHT},
+	     $opt->{SRC_FPS};
+    printf  "Video stream is %s, audio stream(s) are %s \n",  
+             $opt->{video_stream}, 
+	     join (' ', @{$opt->{audiostreams}});
+    print STDERR Dumper( @{$opt->{externalaudio}}) if ($opt->{debug});
+    return $LOG;
+}
+
+sub mkv_prepare_variables ()
+{
+    my $LOG = shift; 
+    my $opt = shift;
+    my $MKVCOVER = "";
+    my $IMGTYPE = "";
+    my $chaptermarks = "";
+
+    # Coverart support
+    print STDERR "mkv_prepare_variables \n" if ($opt->{debug});
+    if (($opt->{coverpicture}) && (-f $opt->{coverpicture})) {
+        (undef, undef, $IMGTYPE) = fileparse($opt->{coverpicture},qr{\..*});
+        given (lc ($IMGTYPE)) {
+            when (["jpg","jpeg","png"]) {
+                $IMGTYPE =~ s/jpg/jpeg/;
+                $opt->{MKVCOVER} = sprintf "--attachment-mime-type image/%s--attachment-name Cover --attach-file \"%s\"",
+                $IMGTYPE,
+                $opt->{coverpicture};
+            }
+            default {
+                print $LOG "-> Image type not supported\n";
+                print $LOG "-> Skipping embedding of cover file\n";
+            }
+        }
+    } elsif ($opt->{coverpicture}) {
+        print $LOG "-> No such file: $opt->{coverart}\n";
+        print $LOG "-> Skipping embedding of cover file\n";
+    }
+
+    # chaptermark support from file
+    if (($opt->{chapters}) && (-f $opt->{chapters})) {
+        $opt->{chaptermarks} = sprintf "--chapters \"$opt->{chapters}\"";
+    }
+
+
+    #set aspect ratio of output
+    if ( $opt->{aspect} eq "" ) {
+        #trying to detect source aspect ratio
+        unless (( $opt->{SRC_WIDTH} eq "" ) || ( $opt->{SRC_HEIGHT} eq "" )) {
+            if (( $opt->{SRC_WIDTH} > 0 ) && ( $opt->{SRC_HEIGHT} > 0 ) || ( not $opt->{SRC_ASPECT} > 0)) {
+                $opt->{SRC_ASPECT} = $opt->{SRC_WIDTH} / $opt->{SRC_HEIGHT} ;
+            }
+            if ( $opt->{SRC_ASPECT} > 2.34 ) {
+                $opt->{aspect} = "--aspect-ratio 0:2.35 ";
+            } elsif ( $opt->{SRC_ASPECT} > 2.20 ) {
+                $opt->{aspect} = "--aspect-ratio 0:2.21 ";
+            } elsif ( $opt->{SRC_ASPECT} > 1.99 ) {
+                $opt->{aspect} = "--aspect-ratio 0:2.00 ";
+            } elsif ( $opt->{SRC_ASPECT} > 1.70 ) {
+                $opt->{aspect} = "--aspect-ratio 0:16/9 ";
+            } elsif ( $opt->{SRC_ASPECT} > 1.60 ) {
+                $opt->{aspect} = "--aspect-ratio 0:1.66 ";
+            } else {
+                $opt->{aspect} = "--aspect-ratio 0:4/3 ";
+            }
+        }
+    } else {
+        if ( $opt->{aspect} eq "widescreen" ) {
+            $opt->{aspect} = "--aspect-ratio 0:16/9 ";
+        } else {
+            $opt->{aspect} = sprintf "--aspect-ratio 0:%s ",$opt->{aspect};
+        }
+    }
+
+    if ( $opt->{SRC_FPS} == 23.976 ) {
+        $opt->{FPS} = "24000/1001";
+    } elsif ( $opt->{SRC_FPS} == 29.970 ) {
+        $opt->{FPS} = "30000/1001"; 
+    } elsif ( $opt->{SRC_FPS} == 25.000 ) {
+        $opt->{FPS} = "25";
+    } else {
+        $opt->{FPS} = $opt->{SRC_FPS}; 
+    }
+    if ( -z $opt->{FPS} ) {
+        $opt->{framespersecond} = "";
+    } else {
+        $opt->{framespersecond} = sprintf "--default-duration 0:%sfps", $opt->{FPS}; 
+    }
+}
+
+
+
+sub avi2mkv_process_audio_streams ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my $AUDIOID;
+#   my $num_internal_audio = scalar(grep (/\s*ID_AUDIO_ID.*/, @mplayer_info));
+    print STDERR "avi2mkv_process_audio_streams \n" if ($opt->{debug});
+    if ( $opt->{replaceinternal} eq "yes" ) {
+        print STDERR "replacing internal audio streams \n" if ($opt->{debug});
+        $AUDIOID = 1;
+#        print STDERR Dumper ($opt) if ($opt->{debug});
+#         print STDERR Dumper (@{$opt->{languages}}) if ($opt->{debug});
+         print STDERR Dumper (@{$opt->{externalaudio}}) if ($opt->{debug});
+        foreach (@{$opt->{externalaudio}}) {
+            print $LOG "avi2mkv_audio_test_codec for stream $AUDIOID from source $opt->{externalaudio}[$AUDIOID -1]\n"; 
+            unless (($opt->{audiotarget} eq "copy") and ($opt->{containerformat} eq "mkv")) {
+                &avi2mkv_audio_test_codec ($LOG, $opt, $AUDIOID, $opt->{externalaudio}[$AUDIOID -1]);
+            }
+            $opt->{AUDIOFILENAME}[$AUDIOID] = $opt->{externalaudio}[$AUDIOID -1];
+            $AUDIOID++;
+        }
+        if ( $opt->{recodeaudio} eq "yes" ) {
+            # need to prepare sources to be in one file, 
+            # no matter what container, so using avi2mkv because it works ;-)
+            my $languagesettings = "";
+            my $audiofiles = "";
+            foreach (@{$opt->{languages}}) {
+                $languagesettings = sprintf "%s --language \"%s\"", $languagesettings, $_;
+            }
+            foreach (@{$opt->{externalaudio}}) {
+                $audiofiles = sprintf "%s \"%s\"", $audiofiles, $_;
+            }       
+            my $command = sprintf "%s %s --replace_internal_audio_stream --report_filename \"%s\" %s", 
+                                   $progs->{avi2mkv},
+                                   $languagesettings, 
+                                   $opt->{file}, 
+                                   $audiofiles;
+            print $LOG $command . "\n";
+            system ($command);
+            my $batchfile = $opt->{moviebase} . "_batch_output_name.txt";
+            open my $BATCH, '<', $batchfile or die "Unable to open $batchfile for reading:$!\n";
+            while (<$BATCH>) {
+                chomp;
+                $opt->{filename} = $_;
+            }
+            close ($BATCH);  
+            unless ( -f $opt->{filename} ) {
+                print STDERR "Muxing of source file for audio recoding failed. Exiting.";
+                exit 1; 
+            }
+        }
+    } elsif (( @{$opt->{audiostreams}} > 1 ) && (@{$opt->{externalaudio}} == 0)) {
+        # Multiple internal audio tracks and no external tracks specified
+        my @internaltracklist;
+        print STDERR Dumper (@{$opt->{languages}}) if ($opt->{debug});
+        foreach (@{$opt->{languages}}) {
+            my $track = &find_audio_stream ("AVI", $_, \@mplayer_info);
+            print STDERR "find_audio_stream delivered language $_ to be stream $track\n";  
+            unless ($track eq "no_language_information") {
+                # language information is available and a stream is found
+                push (@internaltracklist, $track);
+                print STDERR "track with language $_ found: $track \n" if $opt->{debug};
+            }
+        }
+        unless (@internaltracklist) {
+            my (@audiostreams) = grep (s/.*-aid\s+(\d+).*/$1/, @mplayer_info );
+            for (my $i = 0;  $i < @audiostreams ; $i++ ) {
+                $internaltracklist[$i] = $audiostreams[$i];
+            }
+        }
+        print STDERR "internal audio stream list: " . join (' ', @internaltracklist) . "\n" if $opt->{debug};
+        $AUDIOID = 1 ;
+        foreach (@internaltracklist) {
+            print $LOG "avi2mkv_audio_test_codec " . $AUDIOID . " " . $opt->{file} . " -aid " . $_ . "\n";
+            unless (($opt->{audiotarget} eq "copy") and ($opt->{containerformat} eq "mkv")) {
+                &avi2mkv_audio_test_codec ($LOG, $opt, $AUDIOID, $opt->{file},  "-aid $_");
+            }
+            if ( $opt->{recodeaudio} eq "no" ) {
+                unless ($opt->{containerformat} eq "mkv") {
+                    print STDERR "extracting audio stream $_\n" if $opt->{debug};
+                    my $audiostreamid = $opt->{AUDIOFILENAME}[$AUDIOID];
+                    $opt->{AUDIOFILENAME}[$AUDIOID] = $opt->{moviebase} . "_extracted_audio_" . $AUDIOID . "." . lc($opt->{detectaud}[$AUDIOID]);
+                    my $command = sprintf "%s -dumpaudio -aid %s -dumpfile \"%s\" \"%s\" 1>$nulldevice 2>&1", 
+                                           $progs->{mplayer} ,
+                                           $_,
+                                           $opt->{AUDIOFILENAME}[$AUDIOID],
+                                           $opt->{file};
+                    print $LOG $command . "\n";
+                    system ($command);
+                }
+            }
+            print STDERR "Audio stream $AUDIOID needs to be converted? $opt->{needsprocessing}[$AUDIOID]\n" if $opt->{debug};
+            $AUDIOID++;
+        }
+        $opt->{filename} = $opt->{file};
+        $opt->{internaltracklist} = \@internaltracklist
+   } else {
+        my @internaltracklist;
+#        print STDERR Dumper (@{$opt->{languages}}) if ($opt->{debug});
+#        print STDERR Dumper (@{$opt->{externalaudio}}) if ($opt->{debug});
+        foreach (@{$opt->{languages}}) {
+ #         print STDERR Dumper (@mplayer_info) if ($opt->{debug});
+            my $track = &find_audio_stream ("AVI", $_, \@mplayer_info);
+            print STDERR "trackinformation says $track\n" if $opt->{debug};
+            unless ($track eq "no_language_information") {
+                # language information is available and a stream is found
+                if ($opt->{useallinternalaudio} eq "no") {
+                    # use only the first matching internal audio stream
+                    push (@internaltracklist, $track) if (@internaltracklist < 1);
+                } elsif (@internaltracklist < @languages - @externalaudio) {
+                    push (@internaltracklist, $track);
+                }
+            }
+        }
+        print STDERR "internal tracklist with languages is " . join (',', @internaltracklist) . "\n" if $opt->{debug};
+        unless (@internaltracklist) {
+            my (@audiostreams) = grep (s/.*-aid\s+(\d+).*/$1/, @mplayer_info );
+            print STDERR "No language information found. Processing internal tracks by number.\n" if $opt->{debug};
+            my $internalstreamnum;
+            if (@{$opt->{audiostreams}} > @{$opt->{languages}} - @{$opt->{externalaudio}}) {
+                $internalstreamnum = @{$opt->{languages}} - @{$opt->{externalaudio}};
+            } else {
+                $internalstreamnum = @{$opt->{audiostreams}};
+            }
+            for (my $i = 0;  $i < $internalstreamnum; $i++ ) {
+                $internaltracklist[$i] = $audiostreams[$i];
+            }
+        }
+        print STDERR "internal tracklist with numbering is " . join (',', @internaltracklist) . "\n" if $opt->{debug};
+        $opt->{internaltracklist} = \@internaltracklist;
+        print $LOG "avi2mkv_audio_test_codec 1 " . $opt->{file} . "\n";
+        $AUDIOID = 1;
+       foreach (@internaltracklist) {
+           print $LOG "avi2mkv_audio_test_codec " . $AUDIOID . " " . $opt->{file} . " -aid " . $_ . "\n";
+           unless (($opt->{audiotarget} eq "copy") and ($opt->{containerformat} eq "mkv")) {
+               &avi2mkv_audio_test_codec ($LOG, $opt, $AUDIOID, $opt->{file},  "-aid $_");
+           }
+           $opt->{AUDIOFILENAME}[$AUDIOID] = $_;
+           print STDERR "needsprocessing is " .  $opt->{needsprocessing}[$AUDIOID] . "\n";
+           print STDERR "Audio stream $AUDIOID needs to be converted? " . $opt->{needsprocessing}[$AUDIOID] . "\n" if $opt->{debug};
+           $AUDIOID++;
+       }
+       if ( @{$opt->{externalaudio}} ) {
+           foreach (@{$opt->{externalaudio}} ) {
+               if ( -f $_) {
+                   print $LOG "avi2mkv_audio_test_codec 2 " . $_ . "\n";
+                   unless (($opt->{audiotarget} eq "copy") and ($opt->{containerformat} eq "mkv")) {
+                       &avi2mkv_audio_test_codec ($LOG, $opt, $AUDIOID, $_);
+                   }
+                   $opt->{AUDIOFILENAME}[$AUDIOID] = $_ if ( $opt->{recodeaudio} eq "no" );
+                   print STDERR "Audio stream $AUDIOID needs to be converted? " . $opt->{needsprocessing}[$AUDIOID] . "\n" if $opt->{debug};
+                   $AUDIOID++;
+               }
+           }
+           if ( $opt->{recodeaudio} eq "yes" ) {
+               # need to prepare sources to be in one file, no matter what container, so using avi2mkv because it works ;-)
+               my $languagesettings = "";
+               my $audiofiles = "";
+               my $internalstreams = "";
+               foreach (@{$opt->{languages}}) {
+                   $languagesettings = sprintf "%s %s", $languagesettings, $_;
+               }
+               foreach (@internaltracklist) {
+                   $internalstreams = sprintf "%s --internal_audio_stream %s", $audiofiles, $_;
+               }       
+               foreach (@{$opt->{externalaudio}}) {
+                   $audiofiles = sprintf "%s --join_external_audio_file \"%s\"", $audiofiles, $_;
+               }       
+               my $command = sprintf "%s %s --report_filename %s %s %s \"%s\"", 
+                                      $progs->{avi2mkv},
+                                      $languagesettings,
+                                      $internalstreams,
+                                      $audiofiles, 
+                                      $opt->{file};
+               print $LOG $command . "\n";
+               system ($command);
+               my $batchfile = $opt->{moviebase} . "_batch_output_name.txt";
+               open my $BATCH, '>', $batchfile or die "Unable to open $batchfile:$!\n";
+               while (<$BATCH>) {
+                   chomp;
+                   $opt->{filename} = $_;
+               }
+               close ($BATCH);  
+               unless ( -f $opt->{filename} ) {
+                   print STDERR "Muxing of source file for audio recoding failed. Exiting.";
+                   exit 1; 
+               }
+           } else {
+               $opt->{filename} = $opt->{file};
+           }
+       } else {
+           $opt->{filename} = $opt->{file};
+       }
+       if ( $opt->{recodeaudio} eq "no" ) {
+           # extracting audio streams
+           $AUDIOID = 1;
+           foreach (@internaltracklist) {
+               unless ($opt->{containerformat} eq "mkv") {
+                   my $audioid = sprintf " -aid %s", $opt->{AUDIOFILENAME}[$AUDIOID];
+                   $opt->{AUDIOFILENAME}[$AUDIOID] = sprintf "%s_extracted_audio_%s.%s",
+                                          $opt->{moviebase},
+                                          $AUDIOID,
+                                          $opt->{detectaud}[$AUDIOID];
+                   my $command = sprintf "%s %s -dumpaudio -dumpfile \"%s\" \"%s\" 1>$nulldevice 2>&1",
+                                          $progs->{mplayer}, 
+                                          $audioid, 
+                                          $opt->{AUDIOFILENAME}[$AUDIOID],  
+                                          $opt->{file};
+                   print $LOG $command . "\n" ;
+                   system ($command);
+               }
+               $AUDIOID++;
+           }
+       }
+       $opt->{internaltracklist} = \@internaltracklist
+    }
+    if ( $opt->{recodeaudio} eq "yes" ) {
+        # keep mkv merging routine from replacing unnecessarily
+        $opt->{replaceinternal} = "no";
+        print $LOG "getting new stream information\n";
+		my $command = sprintf "%s -identify -frames 0 -vc null -vo null -ao null -nocache \"%s\" 2>&1", 
+		                       $progs->{mplayer}, 
+							   $opt->{filename};
+		print $LOG $command . "\n"; 
+        my @mplayer_info2 = `$command`; 
+        for (my $i=0; $i <  scalar(grep (/\s*ID_AUDIO_ID.*/, @mplayer_info2)) ; $i++ ) {
+            $AUDIOID= $i + 1;
+            if ( $opt->{needsprocessing}[$AUDIOID] eq "yes" ) {
+                print STDERR "recoding audio stream $i\n" if ($opt->{debug});
+                print $LOG "avi2mkv_audio_convert " . $AUDIOID . " " . $opt->{filename} . "\n";
+                &avi2mkv_audio_convert ($LOG, $opt, $AUDIOID, $opt->{filename});
+            } else {
+                print STDERR "extracting audio stream $i\n" if ($opt->{debug});
+                $opt->{AUDIOFILENAME}[$AUDIOID] = sprintf "%s_recoded_audio_%s.%s", 
+                $opt->{moviebase},
+                $AUDIOID,
+                ${detectaud[$AUDIOID]};
+                (undef, undef, my $filetype) = fileparse($opt->{filename},qr{\..*});
+                if ( lc($filetype) eq ".mkv" ) {
+                    my $command = sprintf "%s tracks \"%s\" \"%s:%s\" ",
+                                           $progs->{mkvextract},
+                                           $opt->{filename},
+                                           $AUDIOID + 1,
+                                           $opt->{AUDIOFILENAME}[$AUDIOID];
+                    print $LOG $command . "\n";                    
+                    system ($command);
+                } else {
+                    my $command = sprintf "%s -dumpaudio -dumpfile  \"%s\" -aid %s \"%s\"", 
+                                           $progs->{mplayer},
+                                           $opt->{AUDIOFILENAME}[$AUDIOID],
+                                           $AUDIOID - 1,
+                                           $opt->{filename};
+                    print $LOG $command . "\n";                    
+                    system ($command);
+                }
+            }
+        }
+   }
+}
+
+sub avi2mkv_audio_test_codec ()
+{
+    my $LOG = shift; 
+    my $opt = shift;
+    my $AUDIOID = shift;
+    my $AUDIOSRC = shift;
+    my $AUDIOSRC2 = shift;
+    if ($AUDIOSRC2)  {
+        chomp $AUDIOSRC2;
+    }
+    print STDERR "avi2mkv_audio_test_codec \n" if ($opt->{debug});
+    print $LOG "AUDIOID " . $AUDIOID . "\n" if ($opt->{debug});
+    print $LOG "AUDIOSRC " . $AUDIOSRC . "\n" if ($opt->{debug});
+    if ($AUDIOSRC2) {
+        print $LOG "AUDIOSRC2 " . $AUDIOSRC2 . "\n" if ($opt->{debug});
+    }
+    $opt->{needsprocessing}[$AUDIOID] = "no";
+    my $temp;
+    if ($AUDIOSRC2) {
+        # containerformat with internal audio stream
+        print STDERR "Audio stream in container file. Using mplayer for analyse.\n" if ($opt->{debug});
+        my $command = sprintf "%s \"%s\" %s -identify -frames 0 -vc null -vo null -ao null -nocache 2>&1",
+                               $progs->{mplayer}, 
+                               $AUDIOSRC, 
+                               $AUDIOSRC2;
+        print $LOG  $command . "\n";
+        my $retref = &exec_external_prog ($LOG, $command, $opt);
+        #my @ret = `$command`;
+	if ($opt->{debug}) {
+	    foreach (@{$retref}) {
+	        print $LOG $_;
+	    }
+        }
+#        ($temp) = grep (s/\s*ID_AUDIO_CODEC\s*=(.*)/$1/, @ret);
+        ($temp) = grep (s/\s*ID_AUDIO_CODEC\s*=(.*)/$1/, @{$retref});
+        chomp $temp;
+    } else {
+        # elemetary audio stream
+        print STDERR "Audio stream in raw format. Using ffmpeg for analyse.\n" if ($opt->{debug});
+        my $command = sprintf "%s -i \"%s\" 2>&1", $progs->{ffmpeg}, $AUDIOSRC;
+        print $LOG  $command . "\n";
+        my $retref = &exec_external_prog ($LOG, $command, $opt);
+	#my @ret = `$command`;
+	if ($opt->{debug}) {
+	    foreach (@{$retref}) {
+	        print $LOG $_;
+	    }
+        }
+#        ($temp) = grep (s/\s*Stream #0.0: Audio:\s*(\w+).*/$1/, @ret);
+        ($temp) = grep (s/\s*Stream #0.0: Audio:\s*(\w+).*/$1/, @{$retref});
+        chomp $temp;
+    }
+#   print STDERR Dumper (%opt) if ($opt->{debug});
+
+    my $AUDCODEC = lc ($temp);
+    print STDERR  "AUDCODEC " . $AUDCODEC . "\n" if ($opt->{debug});
+    given ($AUDCODEC) {
+        when (["a52","ac3", "ffac3"]) {  
+            $opt->{audiocodec}[$AUDIOID]="ffac3"; 
+            $opt->{detectaud}[$AUDIOID]="AC3"; 
+        }
+        when (["eac3","ffeac3"]) {       
+            $opt->{audiocodec}[$AUDIOID]="ffeac3"; 
+            $opt->{detectaud}[$AUDIOID]="E-AC3"; 
+        }
+        when (["dca","dts","ffdca"]) {  
+            $opt->{audiocodec}[$AUDIOID]="ffdca"; 
+            $opt->{detectaud}[$AUDIOID]="DTS"; 
+        }
+        when (["vorbis","ffvorbis"]) {     
+            $opt->{audiocodec}[$AUDIOID]="ffvorbis"; 
+            $opt->{detectaud}[$AUDIOID]="Vorbis"; 
+        }
+        when ([ "pcm","ffpcm"]) {       
+            $opt->{audiocodec}[$AUDIOID]="ffpcm"; 
+            $opt->{detectaud}[$AUDIOID]="PCM"; 
+        }
+        when (["faad","aac","ffaac"]) { 
+            $opt->{audiocodec}[$AUDIOID]="ffaac"; 
+            $opt->{detectaud}[$AUDIOID]="AAC"; 
+        }
+        when (["mp3","mad","ffmp3"]) {  
+            $opt->{audiocodec}[$AUDIOID]="ffmp3"; 
+            $opt->{detectaud}[$AUDIOID]="MP3"; 
+        }
+        when (["flac","ffflac"]) {       
+            $opt->{audiocodec}[$AUDIOID]="ffflac"; 
+            $opt->{detectaud}[$AUDIOID]="FLAC"; 
+        }
+#      when ("unsupported") {
+#         when ("dvdpcm") {     $opt->{audiocodec}[$AUDIOID]="unsupported"; 
+#                               $opt->{detectaud}[$AUDIOID]="LPCM"; 
+#         }
+#         when ("wma") {        $opt->{audiocodec}[$AUDIOID]="unsupported"; 
+#                               $opt->{detectaud}[$AUDIOID]="WMA"; 
+#         }
+#      }
+        default {                $opt->{audiocodec}[$AUDIOID]="unsupported"; 
+            $opt->{detectaud}[$AUDIOID]="unknown/unsupported"; 
+        }
+    }
+    print STDERR  "recodeaudio " . $opt->{recodeaudio} . "\n" if ($opt->{debug});
+    $opt->{needsprocessing}[$AUDIOID] = "no";
+    if ( $opt->{recodeaudio} eq "no" ) {
+        given ($opt->{profile}) {
+            when (["fl","flhq"]) {
+                given  ($opt->{detectaud}[$AUDIOID] ) { 
+                    when ("AAC") { print $LOG "audiocodec ok \n";}
+                    default { $opt->{recodeaudio} = "yes";
+                        $opt->{needsprocessing}[$AUDIOID] = "yes";
+                        $opt->{audiotarget} = "aac";}
+                }
+            }
+            when (["qt","qthq","ag1","ag1hq","ipc","ipchq","ip","iphq","iph","iphhq","atv","atvhq","ar","arhq","ar5","ar5hq","bb","bbhq","nks60","nks60hq","psp","psphq","mx","mxhq","htm"]) {
+                given  ($opt->{detectaud}[$AUDIOID]) { 
+                    when ("AAC") { print $LOG "audiocodec ok \n";}
+                    default { $opt->{recodeaudio} = "yes";
+                        $opt->{needsprocessing}[$AUDIOID] = "yes";
+                        $opt->{audiotarget} = "aac";}
+                }
+            }
+            when (["bd40","bdhq40","bd41","bdhq41","avchd","avchdhq"]) {
+                given  ($opt->{detectaud}[$AUDIOID] ) { 
+                    when (["AC3","E-AC3","DTS","LPCM","AAC"]) { print $LOG "audiocodec ok \n";}
+                    default { $opt->{recodeaudio} = "yes";
+                        $opt->{needsprocessing}[$AUDIOID] = "yes";
+                        $opt->{audiotarget} = "mp3";}
+                }
+            }
+            when (["ps3","ps3hq"]) {
+                given  ($opt->{detectaud}[$AUDIOID] ) { 
+                    when ("AAC") { print $LOG "audiocodec ok \n";}
+                    default { $opt->{recodeaudio} = "yes";
+                        $opt->{needsprocessing}[$AUDIOID] = "yes";
+                        $opt->{audiotarget} = "aac";}
+                }
+            }
+            when (["mz","mzhq"]) {
+                given  ($opt->{detectaud}[$AUDIOID] ) { 
+                    when ("AAC") { print $LOG "audiocodec ok \n";}
+                    default { $opt->{recodeaudio} = "yes";
+                        $opt->{needsprocessing}[$AUDIOID] = "yes";
+                        $opt->{audiotarget} = "aac";}
+                }
+            }
+        }
+    } else {
+        $opt->{needsprocessing}[$AUDIOID]="yes";
+    }
+    print STDERR  "audiotarget " . $opt->{audiotarget} . "\n" if ($opt->{debug});
+    my @ffmpeg_info = `$progs->{ffmpeg} -i $AUDIOSRC 2>&1`;
+    my $regex = qr/#0\.${AUDIOID}:\s+Audio.*/;
+    ($opt->{CHANNELS}[$AUDIOID]) = grep (m/$regex/, @ffmpeg_info);
+    unless ($opt->{CHANNELS}[$AUDIOID]) {
+        # matching delivered nothing. Most likely external audio stream
+        ($opt->{CHANNELS}[$AUDIOID]) = grep (m/#0\.\d+:\s+Audio.*/, @ffmpeg_info);
+    }
+    my @dummy2 = split (/\s+/, $opt->{CHANNELS}[$AUDIOID]);
+#    print STDERR "audio info is " . $opt->{CHANNELS}[$AUDIOID] . "\n" if ($opt->{debug});
+    $opt->{CHANNELS}[$AUDIOID] = $dummy2[6];
+    $opt->{CHANNELS}[$AUDIOID] =~ s/,$//;
+    print STDERR "number of channels is " . $opt->{CHANNELS}[$AUDIOID] . "\n" if ($opt->{debug});
+    if (( not  $opt->{CHANNELS}[$AUDIOID] ) || ( $opt->{CHANNELS}[$AUDIOID] eq "" )) {
+        # maybe source file has single audio stream
+        my @ffmpeg_info = `$progs->{ffmpeg} -i $AUDIOSRC 2>&1`;
+        my $regex = qr/Audio.*/;
+        ($opt->{CHANNELS}[$AUDIOID]) = grep (m/$regex/, @ffmpeg_info);
+        my @dummy2 = split (/\s+/, $opt->{CHANNELS}[$AUDIOID]);
+        $opt->{CHANNELS}[$AUDIOID] = $dummy2[6];
+        $opt->{CHANNELS}[$AUDIOID] =~ s/,$//;
+        print STDERR "number of channels is " . $opt->{CHANNELS}[$AUDIOID] . "\n" if ($opt->{debug});
+    }
+    if ( $opt->{needsprocessing}[$AUDIOID] eq "yes" ) {
+        given ($opt->{CHANNELS}[$AUDIOID]) { 
+            when (["6","5.1"]) {
+                if ( $opt->{usestereo} eq "yes" ) {
+                    if ( $opt->{pan} eq "" ) {
+                        given ($opt->{detectaud}[$AUDIOID]) {
+                            when ("AC3")   {$opt->{channelmap}[$AUDIOID]="pan=2:1:0:0.5:0.5:0:1:1:0:0:1:1:1";} 
+                            when ("E-AC3") {$opt->{channelmap}[$AUDIOID]="pan=2:1:0:0.5:0.5:0:1:1:0:0:1:1:1";}
+                            when ("DTS")   {$opt->{channelmap}[$AUDIOID]="pan=2:0.5:0.5:1:0:0:1:1:0:0:1:1:1";}
+                            when ("AAC")   {$opt->{channelmap}[$AUDIOID]="pan=2:0.5:0.5:1:0:0:1:1:0:0:1:1:1";}
+                        }
+                    } else {
+                        $opt->{channelmap}[$AUDIOID] = $opt->{pan};
+                    }
+                    $opt->{channels} = "-channels 2";
+                } else {
+                    #WAV   FL   FR   FC   LFE   SL   SR
+                    #AC3   FL   FC   FR   SL   SR   LFE
+                    #DTS   FC   FL   FR   SL   SR   LFE
+                    #AAC   FC   FL   FR   SL   SR   LFE
+                    #AIFF   FL   SL   FC   FR   SR   LFE 
+                    # These are mappings to AAC 5.1
+                    if ( $opt->{channels} eq "" ) {
+                        given ($opt->{audiotarget}) { 
+                            when ("aac") {
+                                # These are mappings to AAC 5.1
+                                given ($opt->{detectaud}[$AUDIOID]) {
+                                    when ("AC3")   {$opt->{channelmap}[$AUDIOID]="channels=6:6:0:0:1:2:2:1:3:4:4:5:5:3";}
+                                    when ("E-AC3") {$opt->{channelmap}[$AUDIOID]="channels=6:6:0:0:1:2:2:1:3:4:4:5:5:3";}
+                                    when ("DTS")   {$opt->{channelmap}[$AUDIOID]="channels=6:6:0:2:1:0:2:1:3:4:4:5:5:3";}
+                                }
+                            }
+                            when ("ac3") {
+                                # Mapping to AC3 5.1
+                                given ($opt->{detectaud}[$AUDIOID]) {
+                                    when ("DTS")   {$opt->{channelmap}[$AUDIOID]="channels=6:6:0:1:1:0:2:2:3:3:4:4:5:5";}
+                                    when ("E-AC3") {$opt->{channelmap}[$AUDIOID]="channels=6:6:0:0:1:1:2:2:3:3:4:4:5:5";}
+                                    when ("AAC")   {$opt->{channelmap}[$AUDIOID]="channels=6:6:0:1:1:0:2:2:3:3:4:4:5:5";}
+                                }
+                            }
+                            default { $opt->{channelmap}[$AUDIOID]="";};
+                        }                    
+                    } else {
+                        $opt->{channelmap}[$AUDIOID] = $opt->{channels};
+                    }
+                    $opt->{channels} = "-channels 6";
+                }
+            }
+            when (["2","stereo"]) { 
+                $opt->{usestereo} = "yes";
+                $opt->{channels} = "-channels 2";
+                $opt->{channelmap}[$AUDIOID]="";
+            }
+            default {
+                print $LOG "No channel mappings for " . $opt->{CHANNELS}[$AUDIOID] . " channels available. Using stereo output.\n";
+                $opt->{usestereo} = "yes";
+                $opt->{channels} = "-channels 2";
+                $opt->{channelmap}[$AUDIOID]="";
+            }
+        }  
+    }
+    printf $LOG "audiosource %s %s is a %s stream with %s channels\n",
+                $AUDIOSRC, 
+                $AUDIOSRC2 || " ",
+                $opt->{detectaud}[$AUDIOID],
+                $opt->{CHANNELS}[$AUDIOID] ;
+    printf $LOG "does it have to be converted?  %s\n", $opt->{needsprocessing}[$AUDIOID];
+    if ( $opt->{needsprocessing}[$AUDIOID] eq "yes" ) {
+        printf $LOG "It is converted to %s format using the following mapping: %s\n", 
+                     $opt->{audiotarget}, 
+                     $opt->{channelmap}[$AUDIOID];
+        printf $LOG "Using 2 channel stereo mode? %s\n" , $opt->{usestereo};
+    }
+}
+
+
+sub avi2mkv_audio_convert ()
+{
+    my $LOG = shift; 
+    my $opt = shift;
+    my $AUDIOID = shift;
+    my $AUDIOINPUT= shift;
+    my $afilter = "";
+    my $AUDIOSTREAM = "";
+    my $aicodec;
+    print STDERR "avi2mkv_audio_convert \n" if ($opt->{debug});
+    print STDERR "moviebase is " . $opt->{moviebase} . "\n" if ($opt->{debug});
+    my $fifofile = sprintf "%s_audio.wav", $opt->{moviebase} ;
+    print STDERR "fifofile ". $fifofile . "\n" if ($opt->{debug});
+    print STDERR "audiotarget ". $opt->{audiotarget} . "\n" if ($opt->{debug});
+
+    $opt->{AUDIOFILENAME}[$AUDIOID] = sprintf "%s_recoded_audio_%s.%s", 
+                                               $opt->{moviebase}, 
+                                               $AUDIOID, 
+                                               $opt->{audiotarget};
+
+    given ($opt->{audiotarget}) {
+        when ("aac") {
+            $opt->{externalencoder}="yes";
+            $opt->{detectaud}[$AUDIOID] = "AAC";            
+            unless ($os =~ m/mswin/i) { 
+                print $LOG "neroAacEnc is used for converting audio streams to AAC\n";
+                unless ( -f $progs->{neroaacenc} ) {
+                    print STDERR "neroAacEnc is not available. This is needed when encoding to AAC audio for ISO MP4 Containers. Please install it and try again.\n";
+                    exit 1; 
+                }
+                my $neroaacbr = "";
+                my $aacprof = "" ;
+                my $AACTYPE = "" ;
+                given ($opt->{profile}) {
+                    when (["qt","qthq","ag1","ag1hq","ipc","ipchq","ip","iphq","iph","iphhq","atv","atvhq","ar","arhq","ar5","ar5hq","bb","bbhq","nks60","nks60hq","psp","psphq","ps3","ps3hq","mz","mzhq","mx","mxhq","htm"]) {
+                        $aacprof="-lc";
+                        $AACTYPE="LC-AAC";
+                        if ( $opt->{abitrate} eq "" ) {
+                            if ( $opt->{usestereo} eq "yes" ) {
+                                $neroaacbr="-br 128000 " . ${aacprof};
+                            } else {
+                                $neroaacbr="-br 320000 " . ${aacprof};
+                            }
+                        } else {
+                            $neroaacbr = "";
+                        }
+                        given ($opt->{profile}) {
+                            when (["ag1","ag1hq","ipc","ipchq","ip","iphq","iph","iphhq","atv","atvhq","ar","arhq","ar5","ar5hq","bb","bbhq","nks60","nks60hq","psp","psphq","htm"]) {
+                                $neroaacbr =~ /-br (\d+)/;
+                                if ( $1 > 160000 ) {
+                                    print $LOG "\n";
+                                    print $LOG "-> Track $AUDIOID: Audio bitrate for this preset may not exceed 160 kbps!";
+                                    print $LOG "-> Track $AUDIOID: Falling back to 128 kbps!";
+                                    print $LOG "\n";
+                                    $neroaacbr="-br 128000 " . ${aacprof};
+                                    $opt->{usestereo} = "yes";
+                                }
+                            }
+                        }
+                    }
+                    default {
+                        $aacprof = "-he";
+                        $AACTYPE = "LC-AAC"; 
+                        if ( $opt->{abitrate} eq "" ) {
+                            if ( $opt->{usestereo} eq "yes" ) {
+                                $neroaacbr="-br 128000 " . ${aacprof};
+                            } else {
+                                $neroaacbr="-br 320000 " . ${aacprof};
+                            }
+                        } else {
+                            $neroaacbr = sprintf "-br %s %s", $opt->{abitrate} * 1000, $aacprof;
+                        }
+                    }
+                }
+                $opt->{ENCODER} = sprintf "%s -ignorelength %s -if %s -of %s &",
+                                          $progs->{neroaacenc},
+                                          $neroaacbr,
+                                          $fifofile,
+                                          $opt->{AUDIOFILENAME}[$AUDIOID];  
+            } else {
+                # Windows, using eac3to
+
+
+            }
+        }
+        when ("ogg") {
+            $opt->{externalencoder}="yes";
+            $opt->{detectaud}[$AUDIOID] = "Vorbis";
+            unless ($os =~ m/MSWIN/) {
+                unless ( -f $progs->{oggenc} ) {
+                    print STDERR "oggenc is not available. This is needed when encoding to OGM audio. Please install it and try again.\n";
+                    exit 1; 
+                }
+                print $LOG "oggenc is used for converting audio stream to Ogg Vorbis format";
+                $opt->{usestereo} = "yes";
+                my $vorbq;
+                if ( $opt->{abitrate} eq "" ) {
+                    $vorbq = "-b 112";
+                } else {
+                    $vorbq = "-b " . $opt->{abitrate};
+                }
+                $opt->{ENCODER} = sprintf " %s %s %s -o %s &",
+                                           $progs->{oggenc}, 
+                                           $vorbq,
+                                           $fifofile,
+                                           $opt->{AUDIOFILENAME}[$AUDIOID];
+            } else {
+                # Windows, using eac3to
+
+
+            }
+        }
+        when ("flac") {
+            $opt->{detectaud}[$AUDIOID] = "FLAC";
+            unless ($os =~ m/MSWIN/) {
+                unless ( -f $progs->{flac} ) {
+                    print STDERR "flac is not available. This is needed when encoding to FLAC audio. Please install it and try again.\n";
+                    exit 1; 
+                }
+                print $LOG "flac is used for converting audio stream to FLAC format";
+                $opt->{usestereo} = "yes";
+                $opt->{externalencoder}="yes";
+                $opt->{ENCODER} = sprintf "%s -5 %s -o %s &",
+                                           $progs->{flac}, 
+                                           $fifofile, 
+                                           $opt->{AUDIOFILENAME}[$AUDIOID];
+            } else {
+                # Windows, using eac3to
+                $opt->{externalencoder}="yes";
+
+
+            }
+        }
+        when ("ac3") {
+            print $LOG "libavcodec is used to convert audio to AC3\n";
+            if ( $opt->{ac3_dynamic_range_compression} eq "yes" ) {
+                $opt->{ac3drc} = "-a52drc 1";
+            }
+            if ( $opt->{abitrate} eq "" ) {
+                if ( $opt->{usestereo} eq "yes" ) {
+                    $opt->{abitrate}="192";
+                } else {
+                    $opt->{abitrate}="640";
+                }
+            }
+            $opt->{acodec} = sprintf "-oac lavc -lavcopts acodec=ac3:abitrate=%s %s", 
+                                      $opt->{abitrate},  
+				      $opt->{ac3drc};
+            $opt->{externalencoder} = "no";
+            $opt->{detectaud}[$AUDIOID] = "AC3";
+        }
+        when ("mp3") {
+            print $LOG "libmp3lame is used for converting audio streams to MP3\n";
+            $opt->{usestereo} = "yes";
+            if ( $opt->{abitrate} eq "" ) {
+                $opt->{abitrate} = "128";
+            }
+            $opt->{acodec} = sprintf " -oac mp3lame -lameopts cbr:br=%s:mode=0:aq=0 -af format=s16le,lavcresample=44100:16:1 -srate 44100",
+                                      $opt->{abitrate};
+                                      $opt->{externalencoder}="no";
+            $opt->{detectaud}[$AUDIOID] = "MP3";
+        }
+    }
+    given ($opt->{profile}) {
+        when (["fl","flhq"]) {
+            $opt->{afilters}="lavcresample=22050:16:1 -srate 22050";
+            $opt->{channels} = "-channels 2";
+        }
+        when (["ag1","ag1hq","ipc","ipchq","ip","iphq","iph","iphhq","atv","atvhq","ar","arhq","ar5","ar5hq","bb","bbhq","psp","psphq","mz","mzhq","mx","mxhq"]) {
+            $opt->{afilters} = "lavcresample=48000:16:1 -srate 48000";
+            $opt->{channels} = "-channels 2";
+        }
+        when (["ps3","ps3hq"]) {
+            $opt->{afilters} = "lavcresample=48000:16:1 -srate 48000";
+        }
+        when (["nks60","nks60hq","htm"]) {
+            $opt->{afilters} = "lavcresample=44100:16:1 -srate 44100";
+            $opt->{channels} = "-channels 2";
+        }
+    }
+    unless ( $opt->{setaudiovolume} eq "" ) {
+        if ( $opt->{afilters} eq "" ) {
+            $opt->{afilters} = "volume=" . $opt->{setaudiovolume} . ":1";
+        } else {
+            $opt->{afilters} = "volume=" . $opt->{setaudiovolume} . ":1," . $opt->{afilters};
+        }
+    } elsif ( $opt->{normalizeaudio} eq "yes" ) { 
+        if ( $opt->{afilters} eq "" ) {
+            $opt->{afilters} = "volume=5:1"
+        } else {
+            $opt->{afilters} = "volume=5:1," . $opt->{afilters};
+        }   
+    }
+    if ( $opt->{normalizeaudio} eq "yes" ) {  
+        if ( $opt->{afilters} eq "" ) {
+            $opt->{afilters} = "volnorm=2"
+        } else {
+            $opt->{afilters} = "volnorm=2," . $opt->{afilters};
+        }
+    }
+    if ( $opt->{externalencoder} eq "no" ) {
+        if ( $opt->{usestereo} eq "no" ) {
+            # channelmapping is not designed for AC3 target, so deleting it
+            $opt->{channelmap}[$AUDIOID] = "";
+        }
+    }
+    unless ( $opt->{channelmap}[$AUDIOID] eq "" ) {  
+        if ( $opt->{afilters} eq "" ) {
+            $opt->{afilters} = $opt->{channelmap}[$AUDIOID];
+        } else {
+            $opt->{afilters} = $opt->{channelmap}[$AUDIOID] . "," . $opt->{afilters};
+        }
+    }
+    unless ( $opt->{afilters} eq "" ) {
+        $afilter=" -af format=s16le," . $opt->{afilters};
+    } 
+    (undef, undef, my $filetype) = fileparse($AUDIOINPUT,qr{\..*});
+    if ( $filetype eq ".avi" ) {
+        $AUDIOSTREAM="-aid " . $AUDIOID;
+    } else {
+        $AUDIOSTREAM="-aid " . ($AUDIOID - 1) ;
+    }
+    print STDERR "encoding to file " . $opt->{AUDIOFILENAME}[$AUDIOID] . "\n" if ($opt->{debug});
+    if ( $opt->{externalencoder} eq "yes" ) {
+        print STDERR "External encoder is used: " . $opt->{externalencoder} . "\n" if ($opt->{debug}); 
+        if ($os =~ /MSWin.*/) {
+            my $eac3to_output;
+            # probably Windows ;-) 
+            my $eac3to_input = $AUDIOINPUT;
+            $eac3to_output = sprintf "%s_transcoded_audio%s.%s", 
+	                              $opt->{moviebase}, 
+				      $AUDIOID, 
+				      $opt->{audiotarget};
+            (undef, undef, my $filetype) = fileparse($AUDIOINPUT,qr{\..*});
+            if (( lc ($filetype) eq ".avi" ) || ( lc ($filetype) eq ".mkv" ) || ( lc ($filetype) eq ".mp4" ) || ( lc ($filetype) eq ".ogm" ) || ( lc ($filetype) eq ".ts" )) {
+                # source is container file, extracting audio 
+                my $suffix ;
+                given ($opt->{detectaud}[$AUDIOID]) {
+                    when ("AC3")   {$suffix = ".ac3";}
+                    when ("E-AC3") {$suffix = ".eac3";}
+                    when ("DTS")   {$suffix = ".dts";}
+                    when ("LPCM")  {$suffix = ".lpcm";}
+                    when ("Vorbis"){$suffix = ".vorbis";}
+                    when ("PCM")   {$suffix = ".pcm";}
+                    when ("AAC")   {$suffix = ".m4a";}
+                    when ("MP3")   {$suffix = ".mp3";}
+                    when ("FLAC")  {$suffix = ".flac";}
+                    when ("WMA")   {$suffix = ".wma";}
+                }
+                $eac3to_input = sprintf "%s_extracted_audio%s%s", 
+		                         $opt->{moviebase}, 
+					 $AUDIOID, 
+					 $suffix;
+                my $command = sprintf "%s -dumpaudio -aid %s -dumpfile \"%s\" \"%s\" 1>$nulldevice 2>&1", 
+		                       $progs->{mplayer},  
+				       $AUDIOID - 1,
+				       $eac3to_input, 
+				       $AUDIOINPUT;
+                print $LOG $command . "\n";
+                system ($command);
+
+            }
+            if ( $opt->{usestereo} eq "yes" ) {
+                $opt->{channelopts} = "-down2";
+            } else {
+                $opt->{channelopts} = "-down6";
+            }
+	    print STDERR "reencoding audio file $eac3to_input to $eac3to_output using eac3to\n";
+            my $ENCODE = sprintf "%s %s %s %s",
+                                         $progs->{eac3to},
+                                         $eac3to_input,
+                                         $eac3to_output,
+                                         $opt->{channelopts};
+
+            my $retref = &exec_external_prog ($LOG, $ENCODE, $opt); 
+            
+	    if ($opt->{debug}) {
+                foreach (@{$retref}) {
+                    print STDERR $_;
+	        }
+            }
+	    
+	    my $workdir = &canonpath(&cwd());
+	    my $from = &catfile ($workdir, $eac3to_output);
+ 	    my $to = &catfile ($workdir, $opt->{AUDIOFILENAME}[$AUDIOID]);
+ 	    if (-f $eac3to_output) {
+		unless ($eac3to_output eq $opt->{AUDIOFILENAME}[$AUDIOID]) {
+                    rename ($from, $to) or die "could not rename $from to $to: $!\n";
+		}
+	    }
+            if (-f $eac3to_output . ".m4a") {
+		$from =  &catfile ($workdir, $eac3to_output . ".m4a");
+		unless ($eac3to_output . ".m4a" eq $opt->{AUDIOFILENAME}[$AUDIOID]) {
+   	            rename ($from, $to) or die "could not rename $from to $to: $!\n";
+		}
+	    } else {
+  	        my $testfilename = $eac3to_output;
+	        $testfilename =~ s/aac$/m4a/;
+	        $from =  &catfile ($workdir, $testfilename);
+                unless ($testfilename eq $opt->{AUDIOFILENAME}[$AUDIOID]) {
+	            rename ($from, $to)  or die "could not rename $from to $to: $!\n";
+	        }
+	    }
+	    
+	    print "encoded audio to file " . $opt->{AUDIOFILENAME}[$AUDIOID] . "\n";
+
+        } else {
+            # not windows, assuming system is capable of UNIX commands
+            unlink $fifofile if (-f $fifofile);
+            $opt->{FIFO} = "mkfifo " . $fifofile;
+            unless ( $opt->{audiocodec}[$AUDIOID] eq "unsupported" ) {
+                #aicodec=" -ac ${$opt->{audiocodec}[$AUDIOID]}"
+                $aicodec=""
+            }
+            $opt->{MPL} = sprintf "%s \"%s\" %s %s %s %s -vo null -vc null -ao pcm:fast:waveheader:file=%s -novideo -quiet -nolirc 1>$nulldevice 2>&1",
+                                   $progs->{mplayer},
+                                   $AUDIOINPUT,
+                                   $AUDIOSTREAM,
+                                   $aicodec,
+                                   $opt->{channels},
+                                   $afilter,
+                                   $fifofile ;
+            my $conversionscript = $opt->{AUDIOFILENAME}[$AUDIOID] . "_audioenc.sh";
+            if ( -f $conversionscript ) {
+                unlink $conversionscript;
+            }
+            open my $CONV, '>', $conversionscript or die "Unable to open $conversionscript:$!\n";
+            print $CONV "rm $fifofile \n";
+            print $CONV $opt->{FIFO} . "\n";
+            print $CONV $opt->{ENCODER} . "\n";
+            print $CONV "encoderpid=\$!\n" ;
+            print $CONV "echo encoderpid = \$encoderpid\n" ;
+            print $CONV $opt->{MPL} . "\n";
+            print $CONV "sleep 2\n";
+            print $CONV "kill -9 \$encoderpid" . ' 2>&1 >> ' . $nulldevice . "\n";
+            close ($CONV);
+            my $command = "bash " . $conversionscript ;
+            
+	    my $retref = &exec_external_prog ($LOG, $command, $opt); 
+            
+	    if ($opt->{debug}) {
+                foreach (@{$retref}) {
+                    print STDERR $_;
+	        }
+            }
+#            print $LOG $command . "\n";
+#            system ($command);
+            print STDERR "AUDIOFILENAME " . $opt->{AUDIOFILENAME}[$AUDIOID] . "\n" if ($opt->{debug}); 
+        }
+    } else {
+        my $command = sprintf "%s \"%s\" %s -ovc copy -of rawaudio -o \"%s\" %s %s",
+                               $progs->{mencoder},
+                               $AUDIOINPUT,
+                               $AUDIOSTREAM,
+                               $opt->{AUDIOFILENAME}[$AUDIOID],
+                               $opt->{acodec},
+                               $afilter;
+        
+        #print $LOG $command . "\n";  
+	#system ($command);
+	my $retref = &exec_external_prog ($LOG, $command, $opt); 
+            
+	if ($opt->{debug}) {
+            foreach (@{$retref}) {
+                print STDERR $_;
+	    }
+        }
+    }
+}
+
+sub avi2mkv_test_container_profile ()
+{
+    my $LOG = shift; 
+    my $opt = shift;
+    print STDERR "avi2mkv_test_container_profile \n" if ($opt->{debug});
+    print STDERR "preset is $opt->{profile} \n" if ($opt->{debug});
+    given ($opt->{profile}) {
+        when (["fl","flhq","qt","qthq","ag1","ag1hq","ipc","ipchq","ip","iphq","iph","iphhq","atv","atvhq","ar","arhq","ar5","ar5hq","bb","bbhq","nks60","nks60hq","psp","psphq","mx","mxhq","htm"]) {
+            unless ( $opt->{containerformat} eq "mp4" ) {
+                $opt->{containerformat}= "mp4";
+                print $LOG "Changing ouput container format to $opt->{containerformat}\n";
+            }
+        }
+        when (["bd40","bdhq40","bd41","bdhq41","avchd","avchdhq"]) {
+            unless (( $opt->{containerformat} eq "mkv" ) || ($opt->{containerformat} eq "ts" )) {
+                $opt->{containerformat} = "ts";
+                print $LOG "Changing ouput container format to $opt->{containerformat}\n";
+            }
+        }
+        when (["ps3","ps3hq"]) {
+            unless (( $opt->{containerformat} eq "mp4" ) || ( $opt->{containerformat} eq "ts" )) {
+                $opt->{containerformat} = "mp4";
+                print $LOG "Changing ouput container format to $opt->{containerformat}\n";
+            }
+        }
+        when (["mz","mzhq","htm"]) {
+            unless ($opt->{containerformat} eq "mp4" ) {
+                $opt->{containerformat} = "mp4";
+                print $LOG "Changing ouput container format to $opt->{containerformat}\n";
+            }
+        }
+    }
+}
+
+sub process_subtitles ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my @sublist = split (',', $opt->{subtitlelist});
+    my $externalsource = $opt->{externalcounter};
+    print STDERR "process_subtitles \n" if ($opt->{debug});
+    foreach (@sublist) {
+        /([^:]+):([^:]+)/;
+        (my $subfile, my $sublang) = ($1, $2);
+        print STDERR "processing subtitle file $subfile with language $sublang\n" if $opt->{debug};
+        if ( -f "$subfile" ) {
+            if ( $opt->{containerformat} eq "mkv" ) {
+                print $LOG "Processing subtitle source file " . $subfile . "\n";
+                $opt->{trackorder} = $opt->{trackorder} . "," . $externalsource . ":0";
+                $opt->{muxfiles} = sprintf "%s --language 0:%s --forced-track 0:no -s 0 -D -A -T --no-global-tags --no-chapters \"%s\"",
+                                            $opt->{muxfiles},
+                                            $sublang,
+                                            $subfile;
+                $opt->{sourcefilecount} = $opt->{sourcefilecount} + 1;
+                print STDERR "muxfiles is " . $opt->{muxfiles} . "\n" if $opt->{debug};
+                print STDERR "trackorder is " . $opt->{trackorder} . "\n" if $opt->{debug};
+            } elsif ( $opt->{containerformat} eq "mp4" ) {
+                print $LOG "Processing subtitle source file " . $subfile . "\n";
+                $opt->{MP4SUBS} = sprintf "%s -add \"%s:lang=%s\"", $opt->{MP4SUBS}, $subfile, $sublang;
+            } elsif ( $opt->{containerformat} eq "ts" ) {
+                print $LOG "subtitles atm not supported when muxing MPEG Transport Streams\n";
+            } elsif ( $opt->{containerformat} eq "ogm" ) {
+                print $LOG "subtitles atm not supported when muxing Ogm\n";
+            }
+            else {
+                print "containerformat " . $opt->{containerformat} . " not known!\n";
+            }
+            $externalsource++;
+        }
+        else {
+            print "not using subfile $subfile \n";
+        }
+    }
+}
+
+sub mkv_internal_audio ()
+{
+    my $AUDIOID = shift; 
+    my $opt = shift;
+    my $languages = shift;
+    my $defaulttrack = "no";
+    print STDERR "mkv_internal_audio \n" if ($opt->{debug});
+
+    unless ($opt->{tracklist}) {
+        my @tracklist = ();
+        $opt->{tracklist} = \@tracklist;
+   }
+   unless ($opt->{internalaudiotracks}) {
+    my @internalaudiotracks = ();
+    $opt->{internalaudiotracks} = \@internalaudiotracks;
+   }
+   unless ($opt->{internalaudioopts}) {
+       my @internalaudioopts = ();
+       $opt->{internalaudioopts} = \@internalaudioopts;
+   }
+   if ($AUDIOID == 1) {
+       # setting first audio track as the default
+       $defaulttrack = "yes";
+   }
+   print STDERR "internal audio stream ID for mkvmerge is $opt->{audiostreams}[$AUDIOID - 1]\n" if ($opt->{debug});
+   push @{$opt->{internalaudioopts}}, sprintf " --language %s:%s --default-track %s:$defaulttrack --forced-track %s:no",
+                                               $opt->{audiostreams}[$AUDIOID - 1],
+                                               $languages[$AUDIOID -1],
+                                               $opt->{audiostreams}[$AUDIOID - 1],
+                                               $opt->{audiostreams}[$AUDIOID - 1];
+   push @{$opt->{tracklist}}, "0:$opt->{audiostreams}[$AUDIOID - 1]";
+   push @{$opt->{internalaudiotracks}}, $opt->{audiostreams}[$AUDIOID - 1];
+   print STDERR "AUDIOID is $AUDIOID\n" if ($opt->{debug});
+   print STDERR "tracklist is " . join (',', @{$opt->{tracklist}}) . "\n" if ($opt->{debug});
+   print STDERR "internalaudiotracks are " . join (',', @{$opt->{internalaudiotracks}}) . "\n" if ($opt->{debug});
+   print STDERR "internalaudioopts are " . join (',', @{$opt->{internalaudioopts}}) . "\n" if ($opt->{debug});
+   $opt->{internalcounter}++;
+}
+
+sub mkv_external_audio ()
+{
+    my $AUDIOID = shift; 
+    my $opt = shift;
+    my $languages = shift;
+    my $originalname = shift;
+    my $defaulttrack = "no";
+    my $sourcefile;
+
+    print STDERR "mkv_external_audio \n" if ($opt->{debug});
+
+    print STDERR "original name of external audio file is $_\n" if $opt->{debug};
+    print STDERR "recoded name of external audio file is $opt->{AUDIOFILENAME}[$AUDIOID]\n" if $opt->{debug};
+    unless ($opt->{tracklist}) {
+        my @tracklist = ();
+        $opt->{tracklist} = \@tracklist;
+   }
+   unless ($opt->{externalaudiotracks}) {
+       my @externalaudiotracks = ();
+       $opt->{externalaudiotracks} = \@externalaudiotracks;
+   }
+   unless ($opt->{externalaudioopts}) {
+       my @externalaudioopts = ();
+       $opt->{externalaudioopts} = \@externalaudioopts;
+   }
+   if ($AUDIOID == 1) {
+       # setting first audio track as the default
+       $defaulttrack = "yes";
+   }
+   if ($originalname) {
+       $sourcefile = $originalname; 
+   } else {
+       $sourcefile = $opt->{AUDIOFILENAME}[$AUDIOID];
+   }
+   push @{$opt->{externalaudioopts}}, sprintf " --language 0:%s --default-track 0:%s --forced-track 0:no -a 0 -D -S -T --no-global-tags --no-chapters \"%s\"",
+                                               $languages[$AUDIOID - 1],
+                                               $defaulttrack,
+                                               $sourcefile;
+   push @{$opt->{tracklist}}, "$opt->{externalcounter}:0";
+   push @{$opt->{externalaudiotracks}}, $AUDIOID;
+   print STDERR "AUDIOID is $AUDIOID\n" if ($opt->{debug});
+   print STDERR "tracklist is " . join (',', @{$opt->{tracklist}}) . "\n" if ($opt->{debug});
+   print STDERR "externalaudiotracks are " . join (',', @{$opt->{externalaudiotracks}}) . "\n" if ($opt->{debug});
+   print STDERR "externalaudioopts are " . join (',', @{$opt->{externalaudioopts}}) . "\n" if ($opt->{debug});
+   $opt->{externalcounter}++;
+}
+
+sub mkv_merge_opts ()
+{
+    my $opt = shift;
+    my $externalcounter = shift; 
+    my $internalstreams;
+
+    print STDERR "mkv_merge_opts\n" if ($opt->{debug});
+
+    # building external audio stream list
+    $opt->{muxfiles} =  join (" ", @{$opt->{externalaudioopts}}) if ($opt->{externalaudioopts}) ;
+    # building internal audo stream list
+    if ($opt->{internalaudioopts}) {
+        $internalstreams = join (" ", @{$opt->{internalaudioopts}});
+    } else {
+        $internalstreams = "";
+    }
+    print STDERR "muxfiles is $opt->{muxfiles}\n" if ($opt->{debug});
+    print STDERR "internalstreams is $internalstreams\n" if ($opt->{debug});
+    $opt->{sourcefilecount}=$externalcounter;  # is 1 when no external audio streams
+
+    # applying delay /stretch to all audio streams
+    if (( "$opt->{delay}" > 0 ) || ( "$opt->{delay}" < 0 )) {
+        for (my $i = 1; $i == @{$opt->{tracklist}}; $i++) {
+            $opt->{audiodelay} = sprintf "%s --sync $i:%s%s ",
+            $opt->{audiodelay},
+            $i,
+            $opt->{delay},
+            $opt->{stretch};
+        }
+    }
+    print STDERR "audiodelay is $opt->{audiodelay}\n" if ($opt->{debug});
+
+    # building track order
+    if (@{$opt->{tracklist}} > 1) {
+        my $temp = shift @{$opt->{tracklist}}; 
+        my $temp2 = shift @{$opt->{tracklist}}; 
+        if ( $opt->{reverse} eq "yes" ) {
+            $opt->{trackorder} = " --track-order 0:$opt->{video_stream},$temp2,$temp";
+        } else {
+            $opt->{trackorder} = " --track-order 0:$opt->{video_stream},$temp,$temp2";
+        }
+        if (@{$opt->{tracklist}}) {
+            # some tracks left
+            foreach (@{$opt->{tracklist}}) {
+                $opt->{trackorder} = sprintf "%s,%s", $opt->{trackorder} , $_;
+            }
+        }
+    } else {
+        $opt->{trackorder} = " --track-order 0:0,1:0";
+    }
+    print STDERR "trackorder is $opt->{trackorder}\n" if ($opt->{debug});
+
+    # building internal audio stream list
+    foreach (@{$opt->{internalaudiotracks}}) {
+        if ($opt->{extractpartly}) {
+            $opt->{extractpartly} = sprintf "%s,%s", $opt->{extractpartly}, $_;
+        } else {
+            $opt->{extractpartly} = sprintf " -a %s", $_;
+        }
+    }
+    unless ($opt->{extractpartly}) {
+        # only external streams
+        $opt->{extractpartly} = " -A";
+    }
+    print STDERR "extractpartly is $opt->{extractpartly}\n" if ($opt->{debug});
+
+    # Video and the first two audio streams from one source and gives them first and second language tags.
+    # No influence on order of the source streams is possible. If you want more options, extract the stream and use the -i option to feed them to avi2mkv.
+    $opt->{first_source_options} = sprintf " %s %s %s %s --default-track %s:yes --forced-track %s:no %s %s -d %s \"%s\"",
+            $opt->{aspectratio},
+            $opt->{framespersecond},
+            $opt->{audiodelay},
+            $opt->{rawcommand},
+            $opt->{video_stream},
+            $opt->{video_stream},
+            $internalstreams,
+            $opt->{extractpartly},
+            $opt->{video_stream},
+            $opt->{file};
+}
+
+sub mkv_process_audio_streams ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my $AUDIOID;
+    $opt->{internalcounter} = 1;
+    $opt->{externalcounter} = 1;
+    print STDERR "mkv_process_audio_streams \n" if ($opt->{debug});
+    if ( $opt->{replaceinternal} eq "yes" ) {
+        print  "take audio from external file(s)\n";
+        my $audio2 = "";
+        $AUDIOID = 1;
+        my $defaulttrack = "no";
+        # building audio stream list
+        foreach (@{$opt->{externalaudio}} ) {
+            if ( $opt->{recodeaudio} eq "yes" ) {
+                if ($opt->{needsprocessing}[$AUDIOID] eq "yes" ) {
+                    &mkv_external_audio ($AUDIOID, $opt, \@languages);
+                } else {
+                    # giving original stream filename to the subroutine
+                    &mkv_external_audio ($AUDIOID, $opt, \@languages, $_);
+                }
+             } else {               
+                &mkv_external_audio ($AUDIOID, $opt, \@languages, $_);
+            }
+            $AUDIOID++;
+        }
+  } elsif (( @{$opt->{audiostreams}} > 1 ) && (@{$opt->{externalaudio}} == 0)) {
+      print   "Multiple audio tracks in source\n"; 
+      my $defaulttrack = "no";
+      print STDERR "number of internal audio streams: " . scalar(@{$opt->{audiostreams}}) . "\n" if $opt->{debug};
+      for (my $AUDIOID = 1; $AUDIOID <= @{$opt->{audiostreams}}; $AUDIOID++) {
+          print STDERR "audio stream $AUDIOID needs processing: $opt->{needsprocessing}[$AUDIOID]\n" if $opt->{debug};
+          if ( $opt->{recodeaudio} eq "yes" ) {
+              if ($opt->{needsprocessing}[$AUDIOID] eq "yes" ) {
+                  # use reencoded audio stream instead of the source if present
+                  &mkv_external_audio ($AUDIOID, $opt, \@languages);
+              } else {
+                  # internal audio 
+                  &mkv_internal_audio ($AUDIOID, $opt, \@languages);
+              }
+          } else {
+      # internal audio 
+      &mkv_internal_audio ($AUDIOID, $opt, \@languages);
+          }
+     }
+    } else {
+        my $defaulttrack = "no";
+        print   "joining internal and external audio streams\n"; 
+
+        $AUDIOID = 1;
+        if ($opt->{internaltracklist}) {
+            print STDERR "internal audio streams are " . join (',', @{$opt->{internaltracklist}}) . "\n" if $opt->{debug};
+        }
+     foreach (@{$opt->{internaltracklist}}) {
+         if ( $opt->{recodeaudio} eq "yes" ) {
+             if ($opt->{needsprocessing}[$AUDIOID] eq "yes" ) {
+                 # use reencoded audio stream instead of the source if present
+                 &mkv_external_audio ($AUDIOID, $opt, \@languages);
+             } else {
+                 # internal audio 
+                 &mkv_internal_audio ($AUDIOID, $opt, \@languages);
+             }
+         } else {
+              # internal audio 
+              &mkv_internal_audio ($AUDIOID, $opt, \@languages);
+         }
+         $AUDIOID++;
+     }
+     if ($opt->{externalaudio}) {
+         print STDERR "external audio streams are " . join (',', @{$opt->{externalaudio}}) . "\n" if $opt->{debug};
+    }
+     if ( @{$opt->{externalaudio}} ) {
+         foreach (@{$opt->{externalaudio}} ) {
+             print STDERR "processing external audio file $_\n" if $opt->{debug};
+             if ( $opt->{recodeaudio} eq "yes" ) {
+                 if ($opt->{needsprocessing}[$AUDIOID] eq "yes" ) {
+                     &mkv_external_audio ($AUDIOID, $opt, \@languages);
+                 } else {
+                     # giving original stream filename to the subroutine
+                     &mkv_external_audio ($AUDIOID, $opt, \@languages, $_);
+                 }               
+             } else {
+                 # giving original stream filename to the subroutine
+                 &mkv_external_audio ($AUDIOID, $opt, \@languages, $_);
+             }
+             $AUDIOID++;
+         }
+      }
+   }
+   &mkv_merge_opts ($opt, $opt->{externalcounter});
+}
+
+
+sub mkv_muxing ()
+{
+    my $LOG = shift; 
+    my $opt = shift;
+    my $command = "";
+
+    if ( $opt->{reportfilename} eq "yes" ) {
+        # called in batch mode (probably by avi2mkv ;-) )
+        my $batchfile = $opt->{moviebase} . "_batch_output_name.txt";
+        if ( -f $batchfile) {
+            unlink $batchfile;
+        }
+        open my $BATCH, '>', $batchfile or die "Unable to open $batchfile:$!\n";
+        print  $BATCH $opt->{moviename} . "\n";
+        close ($BATCH);  
+    }
+
+    if ( $opt->{alternate_muxing} eq "no" ) {
+        $command = sprintf "%s %s --output \"%s\"  -v --title \"%s\" %s %s %s %s",
+                            $progs->{mkvmerge},
+                            $opt->{MKVCOVER},
+                            $opt->{moviename},
+                            $opt->{movietitle},
+                            $opt->{chaptermarks},
+                            $opt->{first_source_options},
+                            $opt->{muxfiles},
+                            $opt->{trackorder};
+    } else {
+        # mostly unmaintained! 
+        # this was implemented because of sync issues and is unused since DTS audio streams work again
+        my $aspect = "";
+        unless ( -f $progs->{MP4Box} ) {
+            print STDERR "MP4Box not available. This is needed for using RAW Matroska muxing mode. Please correct this.\n";
+            exit 1;
+        }
+        unless ( -f $progs->{mkvextract} ) {
+            print STDERR "mkvextract not available. This is needed for using RAW Matroska muxing mode. Please correct this.\n";
+            exit 1;
+        }
+        print STDERR "using raw mode. This might take a while. Please be patient.\n";
+        # extract video stream
+        my $videofile = $opt->{movietitle} . "_video.h264"; 
+        my $audiofile = $opt->{moviename} . ".ac3";
+        system ("$progs->{mkvextract} tracks $opt->{file} 1:$videofile 2:$audiofile");
+        unless ( -f $videofile ) {
+            #mkvextract failed
+            system ("$progs->{mencoder} $opt->{file} -of rawaudio -ovc copy -oac copy -noskip -o $audiofile");
+            system ("$progs->{MP4Box} -tmp . -aviraw video $opt->{file}");
+            unless ( -f $videofile ) {
+                #MP4Box failed too
+                system ("$progs->{mencoder} $opt->{file} -of rawvideo -ovc copy -oac copy -noskip -o $videofile");
+                unless ( -f $videofile ) {
+                    print STDERR "All attempts to extract raw streams failed! Please check your input!\n";
+                }
+            }
+        }
+        my $mp4file = $opt->{moviename} . ".mp4";
+
+        if ($opt->{aspect} eq "widescreen") {
+            $aspect = sprintf "--aspect-ratio %s:16/9", $opt->{videostream};
+        }
+        system ("$progs->{MP4Box} -tmp . -add $videofile -fps $opt->{SRC_FPS} $mp4file");
+        $command = sprintf "%s --title \"%s\"  -o \"%s\" %s %s %s %s --forced-track 0:no -d 1 -A -S \"%s\" --language 0:%s -a 0 -D -S \"%s\" %s %s",
+                            $progs->{mkvmerge}, 
+                            $opt->{movietitle}, 
+                            $opt->{moviename} . ".mkv",
+                            $opt->{chaptermarks}, 
+                            $opt->{framespersecond}, 
+                            $opt->{audiodelay}, 
+                            $opt->{aspect},
+                            $mp4file,
+                            $opt->{languages}[0],
+                            $opt->{audiofile}, 
+                            $opt->{audio2}, 
+                            $opt->{trackorder};
+    }
+    print $LOG $command . "\n";
+
+#   print STDERR $command . "\n";
+    # running mkvmerge
+    system ($command);
+#   print STDERR Dumper( %$movie) if ($opt->{debug});
+}
+
+sub mp4_muxing ()
+{
+    my $LOG = shift; 
+    my $opt = shift;
+    my @AUDIOINPUT;
+    print STDERR "mp4_muxing \n" if ($opt->{debug});
+    if ( $opt->{chapters} ) {
+        $opt->{chapters} = "-chap " . $opt->{chapters};
+    } else {
+        $opt->{chapters}=""
+    }
+    if ( $opt->{aspect} eq "" ) {
+        $opt->{aspectratio} = sprintf ":par=%s:%s", $opt->{SRC_WIDTH},$opt->{SRC_HEIGHT} ;
+    } else {
+        if ( $opt->{aspect} eq "widescreen" ) {
+            $opt->{aspectratio} = ":par=16:9";
+        } elsif (($opt->{SRC_WIDTH} == 720) && ($opt->{SRC_HEIGHT} == 480) && (($opt->{SRC_FPS}  == 29.970 ) || ($opt->{SRC_FPS}  == 23.976 ))) {
+            # NTSC 4:3
+            $opt->{aspectratio} = ":par=4:3";
+        } else {
+            $opt->{aspectratio} = ":par=" . $opt->{aspect};
+        }
+    }
+    if ( $opt->{MP4HINT} eq "yes" ) {
+        $opt->{MP4HINT} = "-hint";
+    }
+    for (my $i = 1;  $i <= scalar (@{$opt->{AUDIOFILENAME}}) ; $i++ ) {
+        next unless (-f $opt->{AUDIOFILENAME}[$i]);
+        print STDERR "AUDIOFILENAME " . $i . " is " . $opt->{AUDIOFILENAME}[$i] . "\n" if ($opt->{debug}); 
+        print STDERR "CHANNELS " . $opt->{CHANNELS}[$i] . "\n" if ($opt->{debug}); 
+        (undef, undef, my $filetype) = fileparse(lc ($opt->{AUDIOFILENAME}[$i]),qr{\.\w+});
+        given ($filetype) { 
+            when (".aac") { $opt->{audioopts}[$i] = "#audio:name=\"LC-AAC " . $opt->{CHANNELS}[$i] . "\"";}
+            when (".mp3") { $opt->{audioopts}[$i] = "#audio:name=\"MP3 Stereo\"";}
+            when (".ac3") { $opt->{audioopts}[$i] = "#audio:name=\"AC3 " . $opt->{CHANNELS}[$i] . "\"";}
+        }
+        $AUDIOINPUT[$i - 1] = sprintf "-add \"%s\"%s:lang=%s", 
+                                       $opt->{AUDIOFILENAME}[$i],
+                                       $opt->{audioopts}[$i], 
+                                       $opt->{languages}[$i - 1];
+        print STDERR "AUDIOINPUT for stream $i is $AUDIOINPUT[$i - 1]\n" if ($opt->{debug}); 
+    }
+    my $now = localtime time;
+
+    my $MP4TAGS = sprintf "-itags name=\"%s\":comment=\"Tagged by avi2mkv %s on %s\"",
+                           $opt->{moviebase},
+                           $Versionnumber,
+                           $now;
+
+    my $command = sprintf "%s \"%s\" -nosound -ovc copy -of rawvideo -o \"%s\"", 
+                           $progs->{mencoder},
+                           $opt->{file},
+                           $opt->{moviebase} . ".h264";
+    print $LOG $command . "\n";
+    system ($command);
+    print STDERR "MP4SUBS " . $opt->{MP4SUBS} . "\n" if ($opt->{debug}); 
+    print STDERR "chapters " . $opt->{chapters} . "\n" if ($opt->{debug}); 
+    print STDERR "MP4HINT " . $opt->{MP4HINT} . "\n" if ($opt->{debug}); 
+    print STDERR "MP4TAGS " . $MP4TAGS . "\n" if ($opt->{debug}); 
+    my $MP4VID = "-add \"" . $opt->{moviebase} . ".h264\"" . $opt->{aspectratio};
+    $command = sprintf "%s -fps %s -tmp . %s %s %s %s %s %s  -mpeg4 \"%s\"",
+                        $progs->{MP4Box},
+                        $opt->{SRC_FPS},
+                        $MP4VID, 
+                        join (' ', @AUDIOINPUT), 
+                        $opt->{MP4SUBS}, 
+                        $opt->{chapters}, 
+                        $opt->{MP4HINT}, 
+                        $MP4TAGS,
+                        $opt->{moviebase} . ".mp4";
+    print $LOG $command . "\n";
+    system ($command);
+}
+
+
+sub ts_muxing ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my $METAOPT="" ; 
+    my $METAVID="";
+    my $TSOUT = ""; 
+    my @METAAUD;
+    my @TSAUDLANG;
+    my $TSOPT;
+    my $chapterlist="";
+    printf STDERR "TS muxing\n" if ($opt->{debug}); 
+    my $videosource = &catfile (&canonpath(&cwd ()), $opt->{moviebase} . ".h264");
+    if ( -f $opt->{chapters} ) {
+	open my $CHAP, '<', $opt->{chapters} 
+  	    or die "Unable to open $opt->{chapters}:$!\n";
+	my @chapterfile = <$CHAP>;
+	my @timecode = grep (":",  @chapterfile);
+	my $prevtimecode = "" ;
+	foreach (@timecode) {
+	    m/CHAPTER\d\d=(.+)/;
+  	    my $code = $1; 
+  	    chomp $code; 
+  	    next if ($code eq $prevtimecode);
+  	    if ($chapterlist) {
+		$chapterlist = ${chapterlist} . ";" . $code;
+  	    } else {
+  		$chapterlist = "--custom-chapters=" . $code;
+  	    }
+  	    $prevtimecode = $code; 
+	}
+    }
+    given ($opt->{profile}) {
+        when (["bd40","bdhq40","bd41","bdhq41","avchd","avchdhq"]) {
+            if (( $opt->{profile} eq "avchd" ) || ( $opt->{profile} eq "avchdhq" )) {
+                $TSOPT="--avchd";
+            } else {
+                $TSOPT="--blu-ray";
+            }
+	    unless ($chapterlist) {
+		$chapterlist="--auto-chapters=5";
+	    }
+
+            $METAOPT=sprintf "MUXOPT --no-pcr-on-video-pid --new-audio-pes %s %s --vbr", 
+                              $TSOPT, 
+                              $chapterlist;
+            $METAVID=sprintf "V_MPEG4/ISO/AVC, \"%s\", fps=%s", 
+                              $videosource, 
+                              $opt->{SRC_FPS};
+        } default {
+	    if ($chapterlist) {
+        	$METAOPT=sprintf "MUXOPT --no-pcr-on-video-pid --new-audio-pes %s --vbr", 
+                                  $chapterlist;
+                $METAVID=sprintf "V_MPEG4/ISO/AVC, \"%s\", fps=%s, insertSEI, contSPS", 
+                          	  $videosource, 
+                        	  $opt->{SRC_FPS};
+            } else {
+        	$METAOPT="MUXOPT --no-pcr-on-video-pid --new-audio-pes --vbr";
+                $METAVID=sprintf "V_MPEG4/ISO/AVC, \"%s\", fps=%s, insertSEI, contSPS", 
+                          	  $videosource, 
+                        	  $opt->{SRC_FPS};
+	    }
+        }
+    }
+    print STDERR "number of audio streams is " . scalar (@{$opt->{AUDIOFILENAME}}) . "\n" if $opt->{debug};
+    
+    for (my $i = 1;  $i <= scalar (@{$opt->{AUDIOFILENAME}}) ; $i++ ) { 
+        $TSAUDLANG[$i]=", lang=" . $opt->{languages}[$i - 1];
+        my $workingpath = &canonpath(&cwd ());
+        print STDERR "working path is $workingpath\n" if $opt->{debug};
+        printf STDERR "AUDIOFILENAME %s is %s\n", 
+                       $i, 
+                       $opt->{AUDIOFILENAME}[$i] 
+                             if ($opt->{debug}); 
+        if ( -f $opt->{AUDIOFILENAME}[$i] ) {
+            printf STDERR "Audio file %s is available\n", $opt->{AUDIOFILENAME}[$i] if ($opt->{debug}); 
+            printf STDERR "and is of format %s\n", $opt->{detectaud}[$i] if ($opt->{debug}); 
+            my $audiosource = &catfile($workingpath, $opt->{AUDIOFILENAME}[$i]);
+            given ($opt->{detectaud}[$i]) { 
+                when (["AAC",""]) {
+                    $METAAUD[$i] = sprintf "A_AAC, \"%s\"%s", $audiosource, $TSAUDLANG[$i];
+                }
+                when ("MP3") {
+                    $METAAUD[$i] = sprintf "A_MP3, \"%s\"%s", $audiosource, $TSAUDLANG[$i];
+                }
+                when (["AC3","E-AC3"]) {
+                    $METAAUD[$i] = sprintf "A_AC3, \"%s\"%s", $audiosource, $TSAUDLANG[$i];
+                }
+                when ("LPCM") {
+                    $METAAUD[$i] = sprintf "A_LPCM, \"%s\"%s", $audiosource, $TSAUDLANG[$i];
+                }
+                when ("DTS") {
+                    $METAAUD[$i] = sprintf "A_DTS, \"%s\"%s", $audiosource, $TSAUDLANG[$i];
+                }
+            }
+            print STDERR "METAAUD for stream $i is $METAAUD[$i - 1] \n" if ($opt->{debug}); 
+        } else {
+            printf STDERR "Audio file %s not present\n", $opt->{AUDIOFILENAME}[$i] if ($opt->{debug}); 
+            $METAAUD[$i]="";
+        }
+        printf (STDERR "METAAUD %s is %s\n", $i, $METAAUD[$i]) if ($opt->{debug}); 
+    }
+    if ( -f $opt->{AUDIOFILENAME}[2] ) {
+        if ( $opt->{reverse} eq "yes" ) {
+            my $temp=${METAAUD[1]};
+            $METAAUD[1]=${METAAUD[2]};
+            $METAAUD[2]=$temp;
+        }
+    }
+    given ($opt->{profile}) {
+        when (["bd40","bdhq40","bd41","bdhq41"]) {
+            $TSOUT = $opt->{moviebase} . ".bluray";
+        }
+        when (["avchd","avchdhq"]) {
+            $TSOUT = $opt->{moviebase} . ".avchd";
+        }
+        default {
+            $TSOUT = $opt->{moviebase} . ".ts";
+        }
+    }
+    my $command = sprintf "%s \"%s\" -nosound -ovc copy -of rawvideo -o \"%s.h264\"",
+                           $progs->{mencoder}, $opt->{file}, $opt->{moviebase};
+    print $LOG $command . "\n";
+    system ($command);
+
+    my $metafile = $opt->{moviebase} . "_tsmuxer.meta"; 
+    if ( -f $metafile ) {
+        unlink $metafile;
+    }
+    open my $META, '>', $metafile or die "Unable to open $metafile:$!\n";
+    print $META $METAOPT . "\n";
+    print $META $METAVID . "\n";
+    for (my $i = 1; $i <=@METAAUD; $i++) {
+        print $META $METAAUD[$i] . "\n";
+    }
+    close ($META);
+    $command = sprintf "%s \"%s\" %s", $progs->{tsMuxeR} , $metafile , $TSOUT;
+    print $LOG $command . "\n";
+    system ($command);
+}
+
+sub ogm_muxing ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my @OGMAUD;
+    my $internalaudio = "";
+    for (my $i = 1;  $i <= scalar (@{$opt->{AUDIOFILENAME}}) ; $i++ ) { 
+        if ( -f $opt->{AUDIOFILENAME}[$i] ) {
+            (undef, undef, my $filetype) = fileparse(lc ($opt->{AUDIOFILENAME}[$i]),qr{\..*});
+            given ($filetype) { 
+                when ("aac") {
+                    $OGMAUD[$i - 1] = sprintf "-c LANGUAGE=%s --novideo --notext \"%s\"", $opt->{languages}[$i -1], $opt->{AUDIOFILENAME}[$i];
+                }
+                when (["mp3","ac3"]) {
+                    $OGMAUD[$i - 1] = sprintf "-c LANGUAGE=%s --novideo --notext \"%s\"", $opt->{languages}[$i -1], $opt->{AUDIOFILENAME}[$i];
+                }
+                when ("vorbis") {
+                    $OGMAUD[$i - 1] = sprintf "-c LANGUAGE=%s --novideo --notext \"%s\"", $opt->{languages}[$i -1], $opt->{AUDIOFILENAME}[$i];
+                }
+                default {
+                    $OGMAUD[$i - 1] = sprintf "-c LANGUAGE=%s --novideo --notext \"%s\"", $opt->{languages}[$i -1], $opt->{AUDIOFILENAME}[$i];
+                }
+            }
+            $internalaudio = "--noaudio" if ($i == 1); # first audio stream is external too
+            print STDERR "OGMAUD for stream $i is $OGMAUD[$i - 1] \n" if ($opt->{debug}); 
+        }
+    }
+    my $OGMTITLE = "-c TITLE=\"" . $opt->{movietitle} . "\"";
+    my $OGMCHAPS;
+    if (($opt->{chapters}) && (-f $opt->{chapters})) {
+        $OGMCHAPS="-c @" . $opt->{chapters};
+    }
+
+    (undef, undef, my $filetype) = fileparse(lc ($opt->{file}),qr{\..*});
+    unless ($filetype eq "avi") {
+        # transfering source to AVI container
+        system ($progs->{mencoder} . " -ovc copy -oac copy -o " . $opt->{file} . "_ogmmerge.avi " . $opt->{file});
+        $opt->{file} = $opt->{file} . "_ogmmerge.avi";
+    }
+    my $command = sprintf "%s %s %s %s --notext \"%s\"  %s -o \"%s.ogm\"",
+                           $progs->{ogmmerge},
+                           $OGMTITLE, 
+                           $OGMCHAPS,
+                           $internalaudio,
+                           $opt->{file},
+                           join (' ', @OGMAUD),
+                           $opt->{moviebase};
+    print $LOG $command . "\n"; 
+    system ($command);
+}
+
+
+
+# read config file if present 
+my $configfile = &check_config ();
+#print STDERR "config file is $configfile\n";
+if ($configfile) {
+    &read_config ($configfile, \@languages, $progs);
+#   print STDERR Dumper (%$progs);
+#   print STDERR Dumper (@languages);
+# getting values specific to bluray-info
+   open my $CONF, '<', $configfile or die "could not open config file $configfile for reading\n";
+   my @config = <$CONF>;
+   close $CONF;
+   $opt->{profile} = &grep_config_value ("profile", \@config, $configfile); 
+   $opt->{debug} = &grep_config_value ("debug", \@config, $configfile); 
+   $opt->{containerformat} = &grep_config_value ("containerformat", \@config, $configfile);
+   $opt->{audiotarget} = &grep_config_value ("avi2mkv_audiotarget", \@config, $configfile); 
+   $opt->{normalize_audio} = &grep_config_value ("avi2mkv_normalize_audio", \@config, $configfile); 
+   $opt->{setaudiovolume} = &grep_config_value ("avi2mkv_setaudiovolume", \@config, $configfile); 
+   $opt->{usestereo} = &grep_config_value ("avi2mkv_usestereo", \@config, $configfile); 
+   $opt->{pan} = &grep_config_value ("avi2mkv_pan", \@config, $configfile); 
+   $opt->{channels} = &grep_config_value ("avi2mkv_channels", \@config, $configfile); 
+}
+$opt->{debug}           = ""  unless ($opt->{debug} eq "yes");
+$opt->{profile}         = "nq"  unless ($opt->{profile});
+$opt->{containerformat} = "mkv" unless ($opt->{containerformat});
+$opt->{audiotarget}     = "copy" unless ($opt->{audiotarget});
+
+# parse command line arguments if present
+&init ($opt);
+
+my $LOG = &test_options ($opt);
+
+
+unless ( $opt->{profile} eq "" ) {
+    &avi2mkv_test_container_profile ($LOG, $opt);
+}
+
+#print STDERR Dumper (%{$progs}) if $opt->{debug};
+
+given ($opt->{containerformat}) { 
+    when ("mp4") {
+        print STDERR "muxing to ISO MP4 container\n";
+        &avi2mkv_process_audio_streams ($LOG, $opt);
+        # subtitle support
+        if ( $opt->{subtitlelist} ) {
+            &process_subtitles ($LOG, $opt);
+        }
+        &mp4_muxing ($LOG, $opt);
+    }
+    when ("ts") {
+        print STDERR "muxing to MPEG Transport stream container\n";
+        &avi2mkv_process_audio_streams ($LOG, $opt);
+        &ts_muxing ($LOG, $opt);
+    }
+    when ("ogm") {
+        print STDERR "muxing to OGM container\n";
+        &avi2mkv_process_audio_streams ($LOG, $opt);
+        &ogm_muxing ($LOG, $opt);
+    } 
+    when ("mkv") {
+        print STDERR "muxing to Matroska container\n";
+        &avi2mkv_process_audio_streams ($LOG, $opt);
+        &mkv_prepare_variables ($LOG, $opt);
+        &mkv_process_audio_streams ($LOG, $opt);
+        # subtitle support
+        if ( $opt->{subtitlelist} ) {
+            &process_subtitles ($LOG, $opt);
+        }
+
+        &mkv_muxing ($LOG, $opt);
+    }
+}      
+
+close ($LOG);
+
+unless ( $opt->{debug} ) {
+    print STDERR "cleaning up temporary files\n";
+    if ( -f $opt->{moviebase} . "_audio.wav" ) {
+        unlink $opt->{moviebase} . "_audio.wav";
+    }
+}
+
+exit 0; 

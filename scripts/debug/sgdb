@@ -1,0 +1,72 @@
+#!/bin/bash
+
+optstring_long="args:,command:,no-command,no-gdb,strace,verbose"
+optstring_short="x:ntv"
+
+TEMP=$(getopt -o "${optstring_short}" --long "${optstring_long}" --name 'sgdb' -- "$@")
+if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+eval set -- "$TEMP"
+
+unset args_override
+unset cmd_override
+unset no_command
+unset no_gdb
+unset do_strace
+unset verbose_on
+unset verbose_off
+
+while true
+do
+    case "$1" in
+        --args)
+            args_override=$2
+            shift 2;;
+        -x|--command)
+            cmd_override=$2
+            shift 2;;
+        --no-command)
+            no_command=1
+            shift;;
+        -n|--no-gdb)
+            no_gdb=1
+            shift;;
+        -t|--strace)
+            do_strace=strace
+            no_gdb=1
+            shift;;
+        -v|--verbose)
+            verbose_on="set -x"
+            verbose_off="set +x"
+            shift;;
+        --) shift; break;;
+    esac
+done
+
+unset opts
+unset args
+unset cmd
+
+[ -f gdb.cmd ] && cmd=gdb.cmd
+
+at_background() { true; }
+at_exit() { true; }
+
+[ -f gdb.sh ] && . ./gdb.sh "$@"
+
+[ -n "$args_override" ] && args=$args_override
+[ -n "$args" ] && opts="${opts} --args ${args}"
+[ -n "$cmd_override" ] && cmd=$cmd_override
+[ -z "$no_command" -a -n "$cmd" ] && opts="-x ${cmd} ${opts}"
+
+(at_background) &
+if [ -z "$no_gdb" ]
+then
+    $verbose_on
+    /usr/bin/gdb ${opts} "$@"
+    $verbose_off
+else
+    $verbose_on
+    $do_strace "$@" $args
+    $verbose_off
+fi
+at_exit

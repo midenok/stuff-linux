@@ -1,0 +1,14 @@
+#!/bin/sh
+key="$1"
+target="$2"
+
+grep -q "^\(ssh-rsa\|ssh-dsa\)" "${key}" || {
+    echo "Wrong key: ${key}" >&2
+    exit 1
+}
+
+ssh "${target}" <<-END
+    mkdir -p .ssh &&
+    echo "$(cat ${key})" > .ssh/authorized_keys &&
+    echo "\$(hostname): key installed"
+END

@@ -1,0 +1,2 @@
+#!/bin/sh
+find -name Kconfig -exec grep -q "^config $1" '{}' ';' -exec less -p "^config $1" '{}' ';' -quit

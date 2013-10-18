@@ -1,0 +1,1 @@
+aptitude -o DIR=/tmp -o Dir::State::status=/tmp/status -o APT::Architecture=amd64 download "$1"

@@ -1,0 +1,15 @@
+#!/usr/bin/perl
+
+use Cwd 'realpath';
+
+my $dir;
+while (<>) {
+    if (m'(/media/storage\d/links/[^/]+)/') {
+        $dir = $1;
+    }
+}
+exit unless -l $dir;
+chdir $dir;
+my $realdir = realpath('..');
+system "kwrite $realdir/info";
+

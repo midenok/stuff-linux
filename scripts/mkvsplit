@@ -1,0 +1,120 @@
+#!/bin/bash
+
+optstring_long="\
+    chapters,timecodes,output-dir:,dry-run,single-numeration,verbose,rename-as-chapters,skip-chapters:"
+optstring_short="ctO:nNvRs:"
+
+TEMP=$(getopt -o "${optstring_short}" --long "${optstring_long}" --name 'mkvsplit' -- "$@")
+if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+eval set -- "$TEMP"
+
+unset show
+unset output_dir
+unset dryrun
+unset single_numeration
+unset rename
+unset verbose
+unset skip_chapters
+
+while true
+do
+    case "$1" in
+        -c|--chapters)
+            show=chapters
+            shift;;
+        -t|--timecodes)
+            show=timecodes
+            shift;;
+         -O|--output-dir)
+            output_dir="$2"
+            [ -n "$output_dir" ] && output_dir=${output_dir%/}/
+            shift 2;;
+         -n|--dryrun)
+            dryrun=echo
+            shift;;
+         -N|--single-numeration)
+            single_numeration=1
+            shift;;
+         -R|--rename-as-chapters)
+            rename=1
+            shift;;
+         -s|--skip-chapters)
+            skip_chapters=(${2//,/ })
+            shift 2;;
+         -v|--verbose)
+            verbose=verbose_run
+            shift;;
+         --) shift; break;; 
+    esac
+done
+
+skip_chapter() { printf "^CHAPTER%02d=\|^CHAPTER%02dNAME=" "$1" "$1"; }
+
+skip_chapters()
+{
+    if [ "$skip_chapters" ]
+    then
+        skipped=$(skip_chapter ${skip_chapters[0]})
+        unset skip_chapters[0]
+        for c in "${skip_chapters[@]}"
+        do
+            skipped="${skipped}\|$(skip_chapter $c)"
+        done
+        cat|grep -v "$skipped"
+    else
+        cat
+    fi
+}
+
+verbose_run() { set -x; "$@"; set +x; }
+extract_chapters() { mkvextract chapters -s "$1"| skip_chapters; }
+extract_timecodes() { grep "CHAPTER[0-9][0-9]="|sed '1,1d;:a;N;$!ba;s/CHAPTER[0-9][0-9]\=//g;s/\n/,/g'; }
+extract_names() { grep "CHAPTER[0-9][0-9]NAME="|sed ':a;N;$!ba;s/"/\\"/g;s/CHAPTER[0-9][0-9]NAME\=/"/g;s/\n/" /g;$s/$/"/'; }
+
+if [ "$show" = chapters ]
+then
+    extract_chapters "$1"
+    exit $?
+fi
+
+if [ "$show" = timecodes ]
+then
+    extract_chapters "$1" | extract_timecodes
+    exit $?
+fi
+
+global_number=1
+for f in "$@"
+do
+    chapters=$(extract_chapters "$f")
+    t=$(echo "$chapters" | extract_timecodes)
+    $dryrun $verbose mkvmerge --no-chapters --split timecodes:"$t" "$f" -o "${output_dir}%02d_${f}"
+    [ "$single_numeration" -o "$rename" ] && for f2 in "${output_dir}"??"_${f}"
+    do
+        if [ ! -f "$f2" ]
+        then
+            echo "Error: $f2 was not created!" >&2
+            exit 1
+        fi
+        number_part=${f2%_${f}}
+        number_part=${number_part#${output_dir}}
+        f2_renamed=${f2%_${f}}
+
+        if [ "$single_numeration" ]
+        then
+            f2_renamed=${f2_renamed%${number_part}}$(printf "%02d" $global_number)
+        fi
+
+        if [ "$rename" ]
+        then
+            eval names=($(echo "$chapters" | extract_names))
+            i=$((number_part - 1))
+            f2_renamed="${f2_renamed}. ${names[$i]}.mkv"
+        else
+            f2_renamed="${f2_renamed}_${f}" 
+        fi
+  
+        [ "$f2" != "$f2_renamed" ] && $dryrun $verbose mv "$f2" "$f2_renamed"
+        global_number=$((global_number + 1))
+    done
+done

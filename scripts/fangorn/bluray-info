@@ -1,0 +1,1757 @@
+#!/usr/bin/perl
+# bluray-info
+#
+# Program to print information about BluRay data structures including handling of multipart titles
+# and converting selected portions of the structure to MPEG Transport Stream container.
+# Also can export Chaptermarks and convert Subtitles from BD Sup to DVD VobSub format if needed. 
+# 
+# Author: fangorn (at forums.gentoo.org)
+#         Thanks to the author(s) of dump_mpls (maybe part of handbrake later) 
+#         I just reimplemented the parser and output routines in Perl 
+#         and added the functions necessary for doing something (besides display) with the parsed data.
+#
+# Licence: GPL v2 (or later), use at your own risk, no warranties.
+# 
+# Requests: These all are features that I use on a regular basis. If you can think of another cool feature, 
+#           don't hesitate to contact me. Also you can look for updated versions at 
+#           http://forums.gentoo.org/viewtopic-t-744041-start-8.html 
+#           or at the project page at http://fangornsrealm.eu
+# 
+# Requirements: In theory this program should run on every standard Perl installation on any operating system.
+#               It is developed and tested on Linux though. 
+#
+# Dependencies: toolbox_fangorn (version 0.1.0 or newer) my own. get it at http://fangornsrealm.eu
+#               to show Information: Nothing else
+#               to write tsMuxeR .meta file: Nothing else
+#               to automatically export title(s) to .ts container(s): tsMuxeR  (adjust the path to the binary directly after this text block)
+#               to convert SUP subtitles to VOBsub (DVD) subtitle format: tsMuxeR (http://www.smlabs.net/tsmuxer_en.html) 
+#                                                                         java runtime environment (http://www.java.com/en/download/manual.jsp)
+#                                                                         BDSup2Sub.jar (http://forum.doom9.org/showthread.php?t=145277)
+#
+# Feature list:
+# mpls_dump feature list reimplemented in bluray-info: 
+#       - read BluRay Playlist(s) and display runtime of the title(s) specified
+#       - optionally display chapter information
+#       - optionally display detailed information
+#       - optionally display list of clips used in the title
+#       - when parsing multiple Playlists, filter short titles, duplicate and repetitive clips
+# 0.0.1 additions:
+#       - write .meta file(s) (for tsMuxeR) for one playlist, the longest of all given playlists or all given playlists
+#       - optionally filter the output to .meta file for short titles, duplicate and repetitive clips
+#       - optionally only use two predefined languages for audio and subtitle streams to write to .meta file
+#         second language definition is optional (only export one language when the other is "")
+#       - optionally use tsMuxeR and generated .meta file to export selected streams to MPEG Transport stream container
+#       - optionally use tsMuxeR to strip DTS-HD and TrueHD down to DTS and AC3 core respectively
+# 0.1.0 additions:
+#       - accepts single directory as input and parse every playlist in the according BluRay directory structure
+#       - exports all titles longer than <min> minutes when optional value --longer <min> bigger than 1
+#       - optionally only extracts core stream if DTS-HD or TrueHD audio
+#       - exports chapter marks to a file when writing tsMuxeR meta file 
+#         (optionally specify name of the chaptermark file)
+#       - optionally exports and converts Sup subtitles to Vobsub (DVD) format (using BDSup2Sub)
+#         including optional target framerate and video geometry change
+# 0.2.0 additions:
+#       - added dependency on toolbox_fangorn (as the name implies, this is a script where I collect tools used by more than one script)
+#       - accepts working directories different from the BluRay directory structure 
+#         (for example if BluRay directories are not writable)
+#       - extracts Titles from ISO files also if they are mounted in the system
+#         (in Linux only works if the ISO has been decrypted and in Windows also when AnyDvdHD is running)
+#       - number of "preferred languages" is flexible now. Just add or remove elements of the languages array. 
+#       - accepts a a list of files and directories mixed together at command line
+#       - accepts selection of a playlist item (the number) in directory mode
+# 0.2.1 additions:
+#       - configuration file handling (toolbox_fangorn version 0.1.0 or newer)
+# 0.3.0 additions:
+#       - rewritten option handling to add more config file options
+# 0.5.0 - automatically detects slideshows (video without audio) and skips them for longest track search
+#
+# Todo:
+#       - optionally export only first occurance of one language (skip audio commentaries and multiple stream formats)
+#       - optionally check for second video and export only the bigger one
+#       - optionally handle video commentaries
+#       - support text subtitles in tsMuxeR .meta files
+#       - if subtitle is text format, export SRT subtitle without conversion
+#       - optionally transfer SRT subtitles to Sup in tsMuxeR and to VobSub in BDSup2Sub
+#       - optionally convert LPCM to WAV using tsMuxeR
+#       - distinct subtitle handling between ss->stream_type 2, 4 (Program graphis streams) and 3 (SRT)
+#         and ss->coding_type 144,145 and 146
+#       - define a list of ss->char_code text subtitle encodings
+# 
+# Known bugs: 
+# 
+# Changelog:
+# 20100308
+#       - corrected a bug in stream display
+# 20100314
+#       - corrected a bug when for extracting AC3 from TrueHD
+# 20100322
+#       - fixed a bug in chapter export
+# 20100407
+#       - fixed a bug in directory handling
+# 20100412
+#       - added configuration file handling
+#       - now depending on toolbox_fangorn
+#       - fixed some bugs in loop control
+# 20100516
+#       - fixed language routines to accept uppercase entries
+#       - moved known_translations list to toolbox_fangorn
+#       - fixed dependency on mplayer/ffmpeg interactive language setting
+#       - switched from switch/case to given/when. Therefore Perl 5.10 or newer is needed
+# 20110807
+#       - fixed a bug in chapter extraction to file
+# 20110903
+#       - windows support tested
+#       - now depending on toolbox_fangorn.pl version 0.4.0 or newer
+# 201109017    
+#       - generalized the toolbox_file loading
+#         (the user does not have to edit the program any more)
+#
+
+my $Versionnumber = "0.5.3";
+my $os = $^O;
+my $toolbox;
+my $progs = {};
+
+#####################################################################################################
+# Settings to be edited by the user                                                                 #
+#####################################################################################################
+
+# paths to external programs (UNIX style, when under Windows, use Windows Path style c:/Programs/SmartLabs/tsMuxeR.exe)
+# If $toolbox_fangorn is present, the rest of the settings is read out of the config file
+BEGIN {
+    my $os2 = $^O;
+    if ($os2 =~ m/MSWin/) {
+        push @INC, "c:/fangorn/";
+	$toolbox = "toolbox_fangorn.pl";
+    } else {
+        push @INC, "/usr/local/bin";
+	my $login = getlogin || getpwuid($<);
+        push @INC, "/home/$login/bin" if ($login);
+        push @INC, "/usr/bin";
+	$toolbox = "toolbox_fangorn";
+    }    
+}
+
+#####################################################################################################
+# Default settings (function may break if changed)                                                  #
+#####################################################################################################
+
+
+my $tsMuxeR_codec_map = {
+    1  => "V_MPEG-1",
+    2  => "V_MPEG-2",
+    3  => "A_MPEG-1",
+    4  => "A_MPEG-2",
+    128=> "A_LPCM",
+    129=> "A_AC3",
+    130=> "A_DTS",
+    131=> "A_AC3",
+    132=> "A_AC3",
+    133=> "A_DTS",
+    134=> "A_DTS",
+    234=> "V_MS/VFW/WVC1",
+    27 => "V_MPEG4/ISO/AVC",
+    144=> "S_HDMV/PGS",
+    145=> "Interactive Graphics",
+    146=> "S_SRT",
+};
+
+my $codec_map = {
+    1  => "MPEG-1 Video",
+    2  => "MPEG-2 Video",
+    3  => "MPEG-1 Audio",
+    4  => "MPEG-2 Audio",
+    128=> "LPCM",
+    129=> "AC-3",
+    130=> "DTS",
+    131=> "TrueHD",
+    132=> "AC-3 Plus",
+    133=> "DTS-HD",
+    134=> "DTS-HD Master",
+    234=> "VC-1",
+    27 => "H.264",
+    144=> "Presentation Graphics",
+    145=> "Interactive Graphics",
+    146=> "Text Subtitle",
+};
+
+my $video_format_map = {
+    0=>    "Reserved",   
+    1=>    "480i",   
+    2=>    "576i",   
+    3=>    "480p",   
+    4=>    "1080i",   
+    5=>    "720p",   
+    6=>    "1080p",   
+    7=>    "576p",   
+};
+
+my $video_rate_map = {
+    0=>    "Reserved1",   
+    1=>    "23.976",   
+    2=>    "24",   
+    3=>    "25",   
+    4=>    "29.970",   
+    5=>    "Reserved2",   
+    6=>    "50",   
+    7=>    "59.940",   
+};
+
+my $audio_format_map = {
+    0=>    "Reserved1",   
+    1=>    "Mono",   
+    2=>    "Reserved2",   
+    3=>    "Stereo",   
+    4=>    "Reserved3",   
+    5=>    "Reserved4",   
+    6=>    "Multi Channel",   
+    12=>    "Combo",   
+};
+
+my $audio_rate_map = {
+    0=>    "Reserved1",   
+    1=>    "48 Khz",   
+    2=>    "Reserved2",   
+    3=>    "Reserved3",   
+    4=>    "96 Khz",   
+    5=>    "192 Khz",   
+    12=>    "48/192 Khz",   
+    14=>    "48/96 Khz",   
+};
+
+my $sub_subpath_type = {
+    0=>    "Reserved",
+    1=>    "Reserved",
+    2=>    "p. Audio",
+    3=>    "IG menu",
+    4=>    "Text sub",
+    5=>    "OoM Sync",
+    6=>    "OoM Async",
+    7=>    "IM Sync",
+};
+
+my $sub_stream_type = { 
+    0=>    "Reserved",
+    1=>    "PlayItem",
+    2=>    "SubPath",
+    3=>    "IM PIP",
+};
+
+my $stream_application_type = { 
+    0=>    "Reserved",
+    1=>    "Main TS for a Movie",
+    2=>    "Main TS for a Time based slide show",
+    3=>    "Main TS for a Browsable slide show",
+    4=>    "Sub TS for a Browsable slide show",
+    5=>    "Sub TS for a Interactive Graphics menu",
+    6=>    "Sub TS for a Text subtitle",
+    7=>    "Sub TS for a one or more elementary streams path",
+};
+
+#
+# Globals
+#
+
+my $opt = {
+    help => 0,
+    verbose => 0,
+    debug => 0,
+    list_parts => "",
+    list_all => "",
+    list_chap => "",
+    filter_short => "",
+    filter_rep => "",
+    filter_dup => "",
+    tsMuxeR => 0,
+    start_tsMuxeR => 0,
+    longest => 0,
+    first_lang => 0,
+    second_lang => 0,
+    preferred_audio => 0,
+    extract_core => 0,
+    reduce_streams => 0,
+    chapter => "yes",
+    subtitleconvert => 0,
+    fps  =>  "",
+    videoformat  =>  "",
+    item => undef,
+};
+
+#use warnings;
+use strict;
+use feature 'switch';
+use Cwd;
+use File::Basename;
+use File::Spec::Functions;
+use Data::Dumper;
+$Data::Dumper::Purity = 1;
+use POSIX qw(locale_h);
+my $old_locale = setlocale(LC_CTYPE);
+setlocale(LC_CTYPE, "C");
+
+
+# Default values
+my $mplsfile = ();
+my $progs = {};
+my @languages;
+require ($toolbox);
+
+#
+# Command line options processing
+#
+sub init()
+{
+    my $opt = shift;
+    use Getopt::Long qw(:config no_ignore_case bundling);
+    GetOptions( "help|h"               => sub {$opt->{help} = 1;}, 
+		"verbose|v"            => sub {$opt->{verbose} = 1;}, 
+		"debug|d"              => sub {$opt->{debug} = 1;}, 
+		"list_parts|p"         => sub {$opt->{list_parts} = 1;}, 
+		"list_all|i"           => sub {$opt->{list_all} = 1;}, 
+		"list_chap|c"          => sub {$opt->{list_chap} = 1;}, 
+		"filter_short|s:i"     => sub {if ($_[1]) {
+			$opt->{filter_short} = $_[1];
+		    } else {
+			$opt->{filter_short} = 1 
+		    }
+		}, 
+		"filter_rep:i"         => sub {if ($_[1]) {
+			$opt->{filter_rep} = $_[1];
+		    } else {
+			$opt->{filter_rep} = 1
+		    }
+		}, 
+		"filter_dup:i"         => sub {if ($_[1]) {
+			$opt->{filter_dup} = $_[1];
+		    } else {
+			$opt->{filter_dup} = 1 
+		    }
+		},
+		"tsMuxeR|t=s"          => sub {$opt->{tsMuxeR} = $_[1];}, 
+		"start_tsMuxeR|T"      => sub {$opt->{start_tsMuxeR} = 1;},              
+		"longest|L:i"          => sub {if ($_[1]) {
+			$opt->{longest} = $_[1];
+		    } else {
+			$opt->{longest} = 1 
+		    }
+		}, 
+		"first_lang|1=s"       => sub {$opt->{first_lang} = $_[1];}, 
+		"second_lang|2=s"      => sub {$opt->{second_langlp} = $_[1];}, 
+		"preferred_audio|a=s"  => sub {$opt->{preferred_audio} = $_[1];},
+		"extract_core|e"       => sub {$opt->{extract_core} = 1;}, 
+		"reduce_streams|R"     => sub {$opt->{reduce_streams} = 1;}, 
+		"chapter|C:s"          => sub {if ($_[1]) {
+			$opt->{chapter} = $_[1];
+		    } else {
+			$opt->{chapter} = "yes" 
+		    }
+		}, 
+		"subtitleconvert|S"    => sub {$opt->{subtitleconvert} = 1;}, 
+		"fps=s"                => sub {$opt->{fps} = $_[1];},
+		"videoformat=s"        => sub {$opt->{videoformat} = $_[1];}, 
+		"item|I=i"             => sub {$opt->{item} = $_[1];},
+    ) or usage();
+    usage() if $opt->{help};
+    if ($opt->{first_lang}) {
+	if ($opt->{first_lang} =~ /^\w{3}$/) {
+	    if (lookup_str($std::iso639_language_code_map, $opt->{first_lang})) {
+		$languages[0] = $opt->{first_lang};
+	    } else {
+		die "specified language code " . $opt->{first_lang} . " is not available. Exiting.\n";
+	    }         
+	}
+    }
+    if ($opt->{second_lang}) {
+	if ($opt->{second_lang} =~ /^\w{3}$/) {
+	    if (lookup_str($std::iso639_language_code_map, $opt->{second_lang})) {
+		$languages[0] = $opt->{second_lang};
+	    } else {
+		die "specified language code " . $opt->{second_lang} . " is not available. Exiting.\n";
+	    }         
+	}
+    }
+}
+
+#
+# Message about this program and how to use it
+#
+sub usage()
+{
+    my $prog = $0; 
+    if ( $os =~ /MSWin.*/) {
+	$prog =~ s/^.*\\//;
+    } else {
+	$prog =~ s{^.*/}{};
+    }
+    print STDERR << "EOF";
+    $prog version $Versionnumber
+
+Usage: $prog [Options] <mpls file> [<mpls file> ...]
+With no options, produces a list of the playlist(s) with durations
+
+Tip: when using long options, all unambiguous abbreviations are allowed also.
+
+ -I|--item                : Plalist item to process in directory mode. Use this to choose a tite by hand
+
+Display Options: 
+ -p|--list_parts          : list parts of the Playlist
+ -i|--list_all            : list detailed information
+ -c|--list_chap           : list chaptermarks
+
+Filter Options: 
+ -s|--filter_short <num>  : filter short clips 
+			  : <num> optional number of seconds for shortest clip [Default: 120]
+    --filter_rep <num>    : filter clips with repeated parts
+			  : <num> optional number of repeats [Default: 1]
+    --filter_dup <num>    : filter duplicate clips
+			  : <num> optional number of duplicates [Default: 1]
+
+Output Options 
+tsMuxeR control:
+ -t|--tsMuxeR <file>      : generate .meta files for tsMuxer export [mandatory for all tsMuxeR options]
+ -T|--start_tsMuxeR       : directly export .ts file using tsMuxeR
+ -L|--longest <min>       : use longest of multiple tracks
+			  : <min> optional amount of minutes
+			  : if specified, all titles longer that <min> are processed
+ -1|--first_lang <code>   : first audio language (3-digit code, for example: ger) 
+ -2|--second_lang <code>  : second audio language (3-digit code, for example: eng)
+			  : Default is set at the beginning of the script
+ -a|--preferred_audio <fmt> : choose this audio format if available if multiple streams of one selected language are available
+			  : supported Formats are A_DTS, A_AC3 and A_LPCM
+			  : if language and stream format preselection do give more than one audio stream the first one is used
+ -e|--extract_core        : extract core audio from DTS-HD and TrueHD
+ -R|--reduce_streams      : reduce audio and subtitle streams to preferred languages
+
+Chaptermarks:
+ --chapter <filename>     : output chapter marks to file and optional filename [Default output file is tsMuxer <file>_chapters.txt]
+
+Subtitles conversion:
+ --subtitleconvert        : dump subtitles to seperate files and convert them to VOBsub format (using BDSup2Sub) 
+			  : subtitles get converted into seperate files and a list of subtitle:language pairs is exported to a file
+			  : as it is needed by avi2mkv 
+			  : Subtitles will not be available in the .ts file!
+ --fps <framerate>        : target framerate passed to BDSup2Sub for subtitle conversion
+			  : valid framerates are "24p" (23.976 fps) "25p" and "30p" (29.970 fps) 
+ --videoformat <fmt>      : target video format for subtitle conversion
+			  : valid <fmt> are "1080" "720" "pal" "ntsc"
+
+Misc Options:
+ -h|help                  : this help message
+ -v|verbose               : verbose
+ -d|debug                 : print debugging messages to stderr
+
+EOF
+    exit;
+}
+
+
+sub parse_playlistmark()
+{
+    my $opt = shift;
+    # Read chaptermarks of title from binary file
+    my $MPLS = shift;
+    my $dataref = shift; 
+    my $header = $dataref->{"header"};
+    my $playlist = $dataref->{"playlist"};
+    my $playitem = $playlist->{"playlistitem"};
+    my $readvalue;
+    my @chaptermarks = ();
+
+    seek $MPLS, $header->{"mark_pos"}, 0;
+    # Skip the length field, I don't use it
+    read $MPLS,$readvalue,4;
+    my $length = unpack ('L*', pack('L*', unpack('N*', $readvalue)));
+    # Then get the number of marks
+    $readvalue = undef;
+    read $MPLS,$readvalue,2;
+    $playlist->{"mark_count"} = unpack ('S*', pack('S*', unpack('n*', $readvalue)));
+    if ($playlist->{"mark_count"}) {
+	for (my $ii = 0; $ii < $playlist->{"mark_count"}; $ii++) {
+	    my %temp = ();
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,1;
+	    $temp{"mark_id"} = unpack ('C', $readvalue);
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,1;
+	    $temp{"mark_type"} = unpack ('C', $readvalue);
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,2;
+	    $temp{"play_item_ref"} = unpack ('S*', pack('S*', unpack('n*', $readvalue)));
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,4;
+	    $temp{"time"} = unpack ('L*', pack('L*', unpack('N*', $readvalue)));
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,2;
+	    $temp{"entry_es_pid"} = unpack ('S*', pack('S*', unpack('n*', $readvalue)));
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,4;
+	    $temp{"duration"} = unpack ('L*', pack('L*', unpack('N*', $readvalue)));
+	    if (%temp) {
+		push @chaptermarks,\%temp;
+	}
+    }
+    $playlist->{"play_mark"} = \@chaptermarks      
+   }
+}
+
+sub parse_stream()
+{
+    my $opt = shift;
+    # Read Stream information (video, audio, subtitle or other streams) from binary file
+    my $MPLS = shift;
+    my $dataref = shift; 
+    my $ii = shift;
+    my $arrayref = shift;  
+    my $header = $dataref->{"header"};
+    my $playlist = $dataref->{"playlist"};
+    my $playitem = $playlist->{"playlistitem"};
+    my %stream;
+    my $readvalue;
+
+    read $MPLS,$readvalue,1;
+    my $len = unpack ('C', $readvalue);
+    my $pos = tell $MPLS;
+
+    read $MPLS,$readvalue,1;
+    $stream{"stream_type"} = unpack ('C', $readvalue);
+
+    given ($stream{"stream_type"}) {
+	when ( 1 ) {
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,2;
+	    $stream{"pid"} = unpack ('S*', pack('S*', unpack('n*', $readvalue)));
+	}
+	when ([ 2 , 4 ]) {
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,1;
+	    $stream{"subpath_id"} = unpack ('C', $readvalue);
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,1;
+	    $stream{"subclip_id"} = unpack ('C', $readvalue);
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,2;
+	    $stream{"pid"} = unpack ('S*', pack('S*', unpack('n*', $readvalue)));
+	}
+	when ( 3 ) {
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,1;
+	    $stream{"subpath_id"} = unpack ('C', $readvalue);
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,2;
+	    $stream{"pid"} = unpack ('S*', pack('S*', unpack('n*', $readvalue)));
+	}
+	default {
+	    die "Unknown Stream type " . $stream{"stream_type"} . ":$!\n";
+	}
+    }
+
+    seek $MPLS,$pos + $len, 0;
+
+    $readvalue = undef;
+    read $MPLS,$readvalue,1;
+    $len = unpack ('C', $readvalue);
+    $pos = tell $MPLS;
+
+    $readvalue = undef;
+    read $MPLS,$readvalue,1;
+    $stream{"coding_type"} = unpack ('C', $readvalue);
+    my $format; 
+    my $rate;
+    given ($stream{"coding_type"}) {
+	when ([ 1 , 2 , 234 , 27 ]) {
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,1;
+	    my $binmap = dec2bin(bin2dec(unpack ('B8', $readvalue))); 
+#         printf STDERR "Readformat %s\n", $binmap; 
+	    $binmap =~ /0{24}(\d{4})(\d{4})/;
+	    ($format, $rate) = ($1, $2); 
+	    $stream{"format"} = bin2dec($format);
+	    $stream{"rate"} = bin2dec($rate);
+	}
+	when ([ 3 , 4 , 128 , 129 , 130 , 131 , 132 , 133 , 134 ]) {
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,1;
+	    my $binmap = dec2bin(bin2dec(unpack ('B8', $readvalue))); 
+#         printf STDERR "Readformat %s\n", $binmap; 
+	    $binmap =~ /0{24}(\d{4})(\d{4})/;
+	    ($format, $rate) = ($1, $2); 
+	    $stream{"format"} = bin2dec($format);
+	    $stream{"rate"} = bin2dec($rate);
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,3;
+	    $stream{"lang"} = lc (unpack ('A3', $readvalue));
+	}
+	when ([ 144 , 145 ]) {
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,3;
+	    $stream{"lang"} = lc (unpack ('A3', $readvalue));       
+	}
+	when ( 146 ) {
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,1;
+	    $stream{"char_code"} = unpack ('C', $readvalue);
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,3;
+	    $stream{"lang"} = lc (unpack ('A3', $readvalue));       
+	}
+	default {
+	    die "Unknown Coding type " . $stream{"coding_type"} . ":$!\n";
+	}
+    }
+    # skip not processed parts
+    seek $MPLS, $pos + $len, 0;
+#   print STDERR "Data in parse_stream\n" if $opt->{debug};
+#   print STDERR Dumper( %stream ) if $opt->{debug};
+    push @$arrayref, \%stream;
+}
+
+sub parse_playlist_item()
+{
+    my $opt = shift;
+    # Read information of all items of a playlist from binary file
+    my $MPLS = shift;
+    my $dataref = shift; 
+    my $ii = shift; 
+    my $header = $dataref->{"header"};
+    my $playlist = $dataref->{"playlist"};
+    my $playitem = $playlist->{"playlistitem"};
+#   my $item->[$ii] = { "dummy" => "empty" }; 
+    my %item; 
+
+    my $readvalue;
+
+    read $MPLS,$readvalue,2;
+    my $len = unpack ('s*', pack('S*', unpack('n*', $readvalue)));
+    my $pos = tell $MPLS;
+    $readvalue = undef;
+    read $MPLS,$readvalue,5;
+    $item{"clip_id"} = unpack ('A5', $readvalue);
+    chomp $item{"clip_id"};
+    $readvalue = undef;
+    read $MPLS,$readvalue,4;
+    $item{"codecId"} = unpack ('A4', $readvalue);
+    chomp $item{"codecId"};
+    # skip 11 bits, then use BIT 5 (shifted to bit 1) for one and the rest for the second value
+    $readvalue = undef;
+    read $MPLS,$readvalue,1;
+    $readvalue = undef;
+    read $MPLS,$readvalue,1;
+    $item{"is_multi_angle"} = unpack ('B1', $readvalue) & 0x10 >> 4;
+    $item{"connection_condition"} = unpack ('B4', $readvalue) & 0x10 >> 4;
+    $readvalue = undef;
+    read $MPLS,$readvalue,1;
+    $item{"stc_id"} = unpack ('C', $readvalue);
+    $readvalue = undef;
+    read $MPLS,$readvalue,4;
+    $item{"in_time"} = unpack ('L*', pack('L*', unpack('N*', $readvalue)));
+    $readvalue = undef;
+    read $MPLS,$readvalue,4;
+    $item{"out_time"} = unpack ('L*', pack('L*', unpack('N*', $readvalue)));
+    # skip 12 bytes
+    $readvalue = undef;
+    read $MPLS,$readvalue,12;
+    if ($item{"is_multi_angle"}) {
+	$readvalue = undef;
+	read $MPLS,$readvalue,1;
+	$item{"num_angles"} = unpack ('C', $readvalue);
+	# skip reserved, is_different_audio, is_seamless_angle_change
+	$readvalue = undef;
+	read $MPLS,$readvalue,1;
+	for (my $jj = 1; $jj < $item{"num_angles"}; $jj++) {
+	    # Drop clip_id, clip_codec_id, stc_id
+	    $readvalue = undef;
+	    read $MPLS,$readvalue,10;
+	}
+    }
+    $readvalue = undef;
+    read $MPLS,$readvalue,2;
+    $item{"stn_len"} = unpack ('S*', pack('S*', unpack('n*', $readvalue)));
+    # Skip 2 reserved bytes
+    read $MPLS,$readvalue,2;
+
+    $readvalue = undef;
+    read $MPLS,$readvalue,1;
+    $item{"stn_num_video"} = unpack ('C', $readvalue);
+    $readvalue = undef;
+    read $MPLS,$readvalue,1;
+    $item{"stn_num_audio"} = unpack ('C', $readvalue);
+    $readvalue = undef;
+    read $MPLS,$readvalue,1;
+    $item{"stn_num_pg"} = unpack ('C', $readvalue);
+    $readvalue = undef;
+    read $MPLS,$readvalue,1;
+    $item{"stn_num_ig"} = unpack ('C', $readvalue);
+    $readvalue = undef;
+    read $MPLS,$readvalue,1;
+    $item{"stn_num_secondary_audio"} = unpack ('C', $readvalue);
+    $readvalue = undef;
+    read $MPLS,$readvalue,1;
+    $item{"stn_num_secondary_video"} = unpack ('C', $readvalue);
+    $readvalue = undef;
+    read $MPLS,$readvalue,1;
+    $item{"stn_num_pip_pg"} = unpack ('C', $readvalue);
+    # 5 reserve bytes
+    $readvalue = undef;
+    read $MPLS,$readvalue,5;
+
+    # Video streams
+    my @video_streams = ();
+    for (my $jj = 0; $jj < $item{"stn_num_video"}; $jj++) {
+	&parse_stream ($opt, $MPLS, $dataref, $jj, \@video_streams );
+}
+$item{"stn_video"} = \@video_streams;
+
+   # Audio streams
+   if ($item{"stn_num_audio"} > 0) {
+       my @audio_streams = ();
+       for (my $jj = 0; $jj < $item{"stn_num_audio"}; $jj++) {
+	   &parse_stream($opt,  $MPLS, $dataref, $jj, \@audio_streams );
+   }
+   $item{"stn_audio"} = \@audio_streams
+   }
+
+   # Subtitle streams
+   if ($item{"stn_num_pg"} > 0) {
+       my @pg_streams = ();
+       for (my $jj = 0; $jj < $item{"stn_num_pg"}; $jj++) {
+	   &parse_stream($opt,  $MPLS, $dataref, $jj, \@pg_streams );
+   }
+   $item{"stn_pg"} = \@pg_streams
+   }
+
+   push ( @$playitem, \%item );
+   # Seek past any unused items
+   seek $MPLS, $pos + $len, 0;
+#   print STDERR "Data in parse_playlistitem\n" if $opt->{debug};
+#   print STDERR Dumper( $dataref) if $opt->{debug};
+#   print STDERR Dumper($dataref->{"playlist"}{"playlistitem"}) if $opt->{debug};
+}
+
+sub parse_playlist()
+{
+    my $opt = shift;
+    # Read the playlist informations from binary file
+    my $MPLS = shift;
+    my $dataref = shift; 
+    my $header = $dataref->{"header"};
+    my $playlist = $dataref->{"playlist"};
+
+    my $readvalue;
+
+    # position file handle at the beginning of the listing
+    my $pos = tell $MPLS;
+#   printf STDERR "Currently read at Position %s \n", $pos if $opt->{debug};
+#   printf STDERR "Continuing read at Position %s \n", $header->{"list_pos"} if $opt->{debug};
+
+    seek $MPLS,$header->{"list_pos"},0 ;
+
+#   my $pos = tell $MPLS if $opt->{debug};
+#   printf STDERR "Currently read at Position %s \n", $pos if $opt->{debug};
+
+    # read values
+    $readvalue = undef;
+    read $MPLS,$readvalue,4;
+    $playlist->{"length"} = unpack ('L*', pack('L*', unpack('N*', $readvalue)));
+    $readvalue = undef;
+    read $MPLS,$readvalue,2;
+    $playlist->{"reserved_bytes"} = unpack ('S*', pack('S*', unpack('n*', $readvalue)));
+    $readvalue = undef;
+    read $MPLS,$readvalue,2;
+    $playlist->{"list_count"} = unpack ('S*', pack('S*', unpack('n*', $readvalue)));
+    $readvalue = undef;
+    read $MPLS,$readvalue,2;
+    $playlist->{"sub_count"} = unpack ('S*', pack('S*', unpack('n*', $readvalue)));
+    for (my $ii = 0; $ii < $playlist->{"list_count"}; $ii++) {
+	&parse_playlist_item ($opt,  $MPLS, $dataref, $ii ) ;
+    }
+
+    # external subpath not implemented yet
+#   print STDERR "Data in parse_playlist\n" if $opt->{debug};
+#   print STDERR Dumper( $dataref, $header, $playlist ) if $opt->{debug};
+}
+
+sub parse_header()
+{
+    my $opt = shift;
+    # Read the header information from the binary file
+    my $MPLS = shift;
+    my $dataref = shift; 
+    my $header = $dataref->{"header"};
+    my $playlist = $dataref->{"playlist"};
+
+    my $readvalue;
+
+    read $MPLS,$readvalue,4;
+    $header->{"type_indicator"} = unpack ('L*', pack('L*', unpack('N*', $readvalue)));
+    $readvalue = undef;
+    read $MPLS,$readvalue,4;
+    $header->{"type_indicator2"} = unpack ('L*', pack('L*', unpack('N*', $readvalue)));
+    $readvalue = undef;
+    read $MPLS,$readvalue,4;
+    $header->{"list_pos"} = unpack ('L*', pack('L*', unpack('N*', $readvalue)));
+    $readvalue = undef;
+    read $MPLS,$readvalue,4;
+    $header->{"mark_pos"} = unpack ('L*', pack('L*', unpack('N*', $readvalue)));
+    $readvalue = undef;
+    read $MPLS,$readvalue,4;
+    $header->{"ext_pos"} = unpack ('L*', pack('L*', unpack('N*', $readvalue))); 
+#   print STDERR "Data in parse_header\n" if $opt->{debug};
+#   print STDERR Dumper( $dataref, $header, $playlist ) if $opt->{debug};
+}
+
+sub extrapolate()
+{
+    my $opt = shift;
+    # This function corrects the starttime of the clips according to their position in the title
+    # Also it calculates the duration of the whole title
+
+#   my $MPLS = shift;
+    my $dataref = shift; 
+    my $header = $dataref->{"header"};
+    my $playlist = $dataref->{"playlist"};
+    my $playitem = $playlist->{"playlistitem"};
+    my $duration = 0;
+    my $ii;
+#   print STDERR Dumper( $playitem) if $opt->{debug};
+#   printf STDERR "list_count %d\n", $playlist->{"list_count"} if $opt->{debug};
+#   printf STDERR "duration %d\n", $duration if $opt->{debug};
+    for ($ii = 0; $ii < $playlist->{"list_count"}; $ii++) {
+	$playlist->{"playlistitem"}[$ii]{"abs_start"} = $duration;
+	$duration += $playlist->{"playlistitem"}[$ii]{"out_time"} - $playlist->{"playlistitem"}[$ii]{"in_time"};
+	$playlist->{"playlistitem"}[$ii]{"abs_end"} = $duration;
+#      print STDERR Dumper( $playlist->{"playlistitem"}[$ii]) if $opt->{debug};
+#      print STDERR Dumper( $playlist->{"playlistitem"}) if $opt->{debug};
+#      printf STDERR "abs_start %d\n", $playlist->{"playlistitem"}[$ii]{"abs_start"} if $opt->{debug};
+#      printf STDERR "out_time %d\n", $playlist->{"playlistitem"}[$ii]{"out_time"} if $opt->{debug};
+#      printf STDERR "in_time %d\n", $playlist->{"playlistitem"}[$ii]{"in_time"} if $opt->{debug};
+    }
+    $playlist->{"duration"} = $duration;
+
+    # Correcting Chapter marks
+    for ($ii = 0; $ii < $playlist->{"mark_count"}; $ii++) {
+	my $plm = $playlist->{"play_mark"}[$ii];
+	my $pi = $playlist->{"playlistitem"}[$plm->{"play_item_ref"}];
+#      print STDERR Dumper( $plm) if $opt->{debug};
+#      print STDERR Dumper( $pi) if $opt->{debug};
+	if ($plm->{"play_item_ref"} < $playlist->{"list_count"}) {
+	    $plm->{"abs_start"} = $pi->{"abs_start"} + $plm->{"time"} - $pi->{"in_time"};
+	} else {
+	    $plm->{"abs_start"} = 0;
+	}
+    }
+}
+
+sub checklanguage () 
+{
+    my $opt = shift;
+    # This function looks up the language code in a list of allowed 3-digit language codes
+    # if it is not present it spits out a warning to the user.
+    my $dataref = shift; 
+    my $header = $dataref->{"header"};
+    my $playlist = $dataref->{"playlist"};
+
+    my $pi;
+    my $ii; 
+    my $jj;
+
+    for ($ii = 0; $ii < $playlist->{"list_count"}; $ii++) {
+	$pi = $playlist->{"playlistitem"}[$ii];
+	for ($jj = 0; $jj < $pi->{"stn_num_audio"}; $jj++) {
+	    my $ss = $pi->{"stn_audio"}[$jj];
+	    unless (&lookup_str($std::iso639_language_code_map, $ss->{"lang"})) {
+		my $mappedlang = &lookup_str($std::known_translations, $ss->{"lang"});
+		unless ($mappedlang) {
+		    printf STDOUT "Language %s is not ISO conformant and there is no translation available for this code.\n", $ss->{"lang"};
+		    printf STDOUT "Please insert a translation into the known_translations map at the top of the toolbox_fangorn program\n";
+		    printf STDOUT "A list of language codes is provided in the iso639_language_code_map directly below.\n";
+		} else {
+		    $ss->{"lang"} = $mappedlang;
+		}
+	    }
+	}
+	for ($jj = 0; $jj < $pi->{"stn_num_pg"}; $jj++) {
+	    my $ss = $pi->{"stn_pg"}[$jj];
+	    unless (&lookup_str($std::iso639_language_code_map, $ss->{"lang"})) {
+		my $mappedlang = &lookup_str($std::known_translations, $ss->{"lang"});
+		unless ($mappedlang) {
+		    printf STDOUT "Language %s is not ISO conformant and there is no translation available for this code.\n", $ss->{"lang"};
+		    printf STDOUT "Please insert a translation into the known_translations map at the top of the toolbox_fangorn program\n";
+		    printf STDOUT "A list of language codes is provided in the iso639_language_code_map directly below.\n";
+		} else {
+		    $ss->{"lang"} = $mappedlang;
+		}
+	    }
+	}
+    }
+}
+
+sub parse_mpls()
+{
+    my $opt = shift;
+    # Read all information from one specific .mpls file
+    my $MPLS = shift; 
+    my $dataref = shift; 
+    my $header = $dataref->{"header"};
+    my $playlist = $dataref->{"playlist"};
+    my $playitem = $playlist->{"playlistitem"};
+
+#   print STDERR "Parsing data into data structure " . $dataref . ".\n" if $opt->{debug};
+
+    &parse_header ($opt, $MPLS, $dataref );
+
+#   print STDERR "Data in parse_mpls\n" if $opt->{debug};
+#   print STDERR Dumper( $dataref, $header, $playlist ) if $opt->{debug};
+
+    &parse_playlist ($opt, $MPLS, $dataref );
+
+    &parse_playlistmark ($opt, $MPLS, $dataref );
+
+    &extrapolate ($opt, $dataref );
+
+    &checklanguage ($opt, $dataref);
+
+#   print STDERR "Data in parse_mpls\n" if $opt->{debug};
+#   print STDERR Dumper( $dataref) if $opt->{debug};
+}
+
+sub show_marks()
+{
+    my $opt = shift;
+    # Display Chaptermarks of Title
+    my $dataref = shift; 
+    my $header = $dataref->{"header"};
+    my $playlist = $dataref->{"playlist"};
+    my $playitem = $playlist->{"playlistitem"};
+    my $ii;
+    my $plm;
+    my $pi;
+
+    for ($ii = 0; $ii < $playlist->{"mark_count"}; $ii++) {
+	$plm = $playlist->{"play_mark"}[$ii];
+	printf(STDOUT "PlayMark %d\n", $ii);
+	printf(STDOUT "Type: %02x\n", $plm->{"mark_type"});
+	if ($plm->{"play_item_ref"} < $playlist->{"list_count"}) {
+	    $pi = $playlist->{"play_item"}[$plm->{"play_item_ref"}];
+	    printf(STDOUT "PlayItem: %s\n", $pi->{"clip_id"} );
+	} else {
+	    printf(STDOUT "PlayItem: Invalid reference");
+	}
+	printf(STDOUT "Time (ticks): %lu\n", $plm->{"time"});
+	my $min = $plm->{"abs_start"} / ( 45000 * 60 );
+	my $sec = ($plm->{"abs_start"} - $min * 45000 * 60) / 45000;
+	my $printsec;
+	if ( $sec >= 10 ) {
+	    $printsec = sprintf ( "%.3f", $sec )
+	} elsif ( $sec < 0 ) {
+	    $printsec = '00.000'
+	} else {
+	    $printsec = sprintf ( "0%.3f", $sec )
+	}
+	printf(STDOUT "Abs Time (mm:ss.ms): %d:%s\n", $min, $printsec);
+	printf(STDOUT "\n");
+    }
+}
+
+sub show_clip_list()
+{
+    my $opt = shift;
+    # Display list of clips in Title
+    my $dataref = shift; 
+    my $header = $dataref->{"header"};
+    my $playlist = $dataref->{"playlist"};
+    my $playitem = $playlist->{"playlistitem"};
+
+    for (my $ii = 0; $ii < $playlist->{"list_count"}; $ii++) {
+	my $pi = $playlist->{"playlistitem"}[$ii];
+#      print STDERR "Data in show_clip_list\n" if $opt->{debug};
+#      print STDERR Dumper( $pi) if $opt->{debug};
+	my $duration = $pi->{"out_time"} - $pi->{"in_time"};
+	printf(STDOUT "%s -- Duration: %d:%02d\n", $pi->{"clip_id"} . ".m2ts",
+	    $duration / (45000 * 60), ($duration / 45000) % 60);
+    }
+}
+
+sub show_stream()
+{
+    my $opt = shift;
+    # Display Stream information of Title (part of the detailed information routine)
+    my $ss = shift;
+
+#   print STDERR Dumper( $ss) if $opt->{debug};
+    printf(STDOUT "         Codec (%s): %s\n", $ss->{"coding_type"},
+	&lookup_str($codec_map, $ss->{"coding_type"}));
+    given ($ss->{"stream_type"}) {
+	when ( 1 ) {
+	    printf(STDOUT "         PID: %04d\n", $ss->{"pid"});
+	}
+	when ([ 2 , 4 ]) {
+	    printf(STDOUT "         SubPath Id: %s\n", $ss->{"subpath_id"});
+	    printf(STDOUT "         SubClip Id: %s\n", $ss->{"subclip_id"});
+	    printf(STDOUT "         PID: %04d", $ss->{"pid"});
+	}
+	when ( 3 ) {
+	    printf(STDOUT "         SubPath Id: %02x\n", $ss->{"subpath_id"});
+	    printf(STDOUT "         PID: %04d\n", $ss->{"pid"});
+	}
+	default {
+	    print(STDOUT "unrecognized stream type " . $ss->{"stream_type"} . "\n");
+	}
+    }
+
+    given ($ss->{"coding_type"}) {
+	when ([ 1 , 2 , 234 , 27 ]) {
+	    printf(STDOUT "         Format %03d: %s\n", $ss->{"format"},
+		&lookup_str($video_format_map, $ss->{"format"}));
+	    printf(STDOUT "         Rate %03d: %s\n", $ss->{"rate"},
+		&lookup_str($video_rate_map, $ss->{"rate"}));
+	}
+	when ([ 3 , 4 , 128 , 129 , 130 , 131 , 132 , 133 , 134 ]) {
+	    printf(STDOUT "         Format %03d: %s\n", $ss->{"format"},
+		&lookup_str($audio_format_map, $ss->{"format"}));
+	    printf(STDOUT "         Rate %03d: %s\n", $ss->{"rate"},
+		&lookup_str($audio_rate_map, $ss->{"rate"}));
+	    printf(STDOUT "         Language: %s\n", $ss->{"lang"});
+	}
+	when ([ 144 , 145 ]) {
+	    printf(STDOUT "         Language: %s\n", $ss->{"lang"});
+	}
+	when ( 146 ) {
+	    printf(STDOUT "         Char Code: %03d\n", $ss->{"char_code"});
+	    printf(STDOUT "         Language: %s\n", $ss->{"lang"});
+	}
+	default {
+	    print(STDOUT "unrecognized stream type " . $ss->{"coding_type"} . ":$!\n");
+	}
+    }
+}
+
+sub show_details()
+{
+    my $opt = shift;
+    # Display detailed information about a Title
+    my $dataref = shift; 
+    my $header = $dataref->{"header"};
+    my $playlist = $dataref->{"playlist"};
+    my $playitem = $playlist->{"playlistitem"};
+    my $pi;
+    my $ii; 
+    my $jj;
+
+    for ($ii = 0; $ii < $playlist->{"list_count"}; $ii++) {
+	$pi = $playlist->{"playlistitem"}[$ii];
+	printf(STDOUT "   Clip Id %s\n", $pi->{"clip_id"});
+	printf(STDOUT "      Connection Condition: %02x\n", 
+	    $pi->{"connection_condition"});
+	printf(STDOUT "      Stc Id: %02x\n", $pi->{"stc_id"});
+	printf(STDOUT "      In-Time: %d\n", $pi->{"in_time"});
+	printf(STDOUT "      Out-Time: %d\n", $pi->{"out_time"});
+	for ($jj = 0; $jj < $pi->{"stn_num_video"}; $jj++) {
+	    printf(STDOUT "      Video Stream %d:\n", $jj);
+	    &show_stream($opt, $pi->{"stn_video"}[$jj]);
+	}
+	for ($jj = 0; $jj < $pi->{"stn_num_audio"}; $jj++) {
+	    printf(STDOUT "      Audio Stream %d:\n", $jj);
+	    &show_stream($opt, $pi->{"stn_audio"}[$jj]);
+	}
+	for ($jj = 0; $jj < $pi->{"stn_num_pg"}; $jj++) {
+	    printf(STDOUT "      Presentation Graphics Stream %d:\n", $jj);
+	    &show_stream($opt, $pi->{"stn_pg"}[$jj]);
+	}
+	printf(STDOUT "\n");
+    }
+}
+
+sub filter_short ()
+{
+    my $opt = shift;
+    my $pl = shift; 
+    my $seconds = shift; 
+    # Ignore short playlists
+    if ($pl->{"duration"} / 45000 <= $seconds) {
+	return 0;
+    }
+    return 1;
+}
+
+sub filter_short_minutes ()
+{
+    my $opt = shift;
+    my $pl = shift; 
+    my $minutes = shift; 
+    # Ignore short playlists
+    if ($pl->{"duration"} / 45000 / 60 <= $minutes) {
+	return 0;
+    }
+    return 1;
+}
+
+sub find_repeats()
+{
+    my $opt = shift;
+    my $pl = shift; 
+    my $filename = shift; 
+    my $count = 0;
+
+    for (my $ii = 0; $ii < $pl->{"list_count"}; $ii++) {
+	my $pi = $pl->{"playlistitem"}[$ii];
+	my $m2ts_file = $pi->{"clip_id"};
+	# Ignore titles with repeated segments
+	if ( $filename eq $m2ts_file) {
+	    $count++;
+	}
+    }
+    return $count;
+}
+
+sub filter_repeats()
+{
+    my $opt = shift;
+    my $pl = shift; 
+    my $repeats = shift; 
+
+    for (my $ii = 0; $ii < $pl->{"list_count"}; $ii++) {
+	my $pi = $pl->{"playlistitem"}[$ii];
+	my $m2ts_file = $pi->{"clip_id"};
+	# Ignore titles with repeated segments
+	if (&find_repeats($opt, $pl, $m2ts_file) > $repeats) {
+	    return 0;
+	}
+    }
+    return 1;
+}
+
+sub filter_dup()
+{
+    my $opt = shift;
+    my $pl_list = shift; 
+    my $count = shift; 
+    my $pl = shift; 
+    my $jj;
+
+    for (my $ii = 0; $ii < $count; $ii++) {
+	if ($pl->{"list_count"} != $pl_list->[$ii]{"playlist"}{"list_count"} ||
+	    $pl->{"duration"} != $pl_list->[$ii]{"playlist"}{"duration"}) {
+	    next;
+	}
+	for ($jj = 0; $jj < $pl->{"list_count"}; $jj++) {
+	    my $pi1 = $pl->{"playlistitem"}[$jj];
+	    my $pi2 = $pl_list->[$ii]{"playlist"}{"playlistitem"}[$jj];
+	    if ($pi1->{"clip_id"} eq $pi2->{"clip_id"} ||
+		$pi1->{"in_time"} != $pi2->{"in_time"} ||
+		$pi1->{"out_time"} != $pi2->{"out_time"}) {
+		last;
+	    }
+	}
+	if ($jj != $pl->{"list_count"}) {
+	    next;
+	}
+	return 0;
+    }
+    return 1;
+}
+
+sub read_mpls_file () 
+{
+    my $opt = shift;
+    # Open file
+    my $filepath = shift; 
+    my $ret = 0;
+
+    die "File $filepath not found" unless (-f $filepath);
+
+#   print STDERR "Opening file " . $filepath . ".\n" if $opt->{debug};
+
+    open my $MPLS, '<', $filepath or die "Unable to open $filepath:$!\n";
+
+    # preparing data structure
+    my @playlistmark;
+    my @playlistitem;
+    my @sublistitem;
+    my $headerref = { "dummy" => "empty", }; 
+    my $playlistref = { 
+	"playlistmark" => \@playlistmark,
+        "playlistitem" => \@playlistitem,
+        "sublistitem"  => \@sublistitem,
+   };
+   my $dataref = { 
+       "header" => $headerref ,
+       "playlist" => $playlistref,
+   };
+
+   $filepath =~ /.+(\d{5})\.mpls/;
+   my $filenumber = $1;
+   push ( @$mplsfile, {
+	   "filename" => $filepath , 
+	   "filenumber" => $filenumber, 
+	   "data" => $dataref,
+       });
+
+   &parse_mpls ($opt, $MPLS, $dataref) ;
+
+#   if ($opt->{debug}) {
+#       open my $DEBUG, ">bluray-info_debugfile.log";
+#       print $DEBUG Dumper @$mplsfile;
+#   }
+   
+   if ( $opt->{filter_short}) {
+       my $ret = &filter_short ($opt,$playlistref, $opt->{seconds});
+       next unless $ret; 
+   }  
+
+   if ( $opt->{filter_rep}) {
+       my $ret = &filter_repeats ($opt,$playlistref, $opt->{repeats});
+       next unless ($ret);
+   } 
+
+   if ( $opt->{filter_dup}) {
+       my $ret = &filter_dup ($opt,$mplsfile, $opt->{dups}, $playlistref);
+       next unless ($ret);
+   } 
+
+   if (( $opt->{longest} ) && ($opt->{longest} > 1)) {
+       my $ret = &filter_short_minutes ($opt,$playlistref, $opt->{longest});
+       next unless ($ret);
+   }
+
+   &show_details ($opt,$dataref) if  $opt->{list_all};
+
+   &show_clip_list ($opt,$dataref) if  $opt->{list_parts};
+
+   &show_marks ($opt,$dataref) if  $opt->{list_chap};
+
+   printf(STDOUT "%s -- Duration: minutes %4lu:%02lu\n", 
+       $filepath,
+       $playlistref->{"duration"} / (45000 * 60),
+       ($playlistref->{"duration"} / 45000) % 60);
+
+}
+
+sub write_tsMuxeR_meta_file () 
+{
+    my $opt = shift;
+    my $META = shift;
+    my $playlist = shift; 
+    my $index = shift; 
+    my $workdir = shift;
+    my $basedir = shift;
+    my $playitem = $playlist->{"playlistitem"};
+    my $itemilist;
+    my $pi;
+    my $ii; 
+    my $jj;
+#	print STDERR "index is $index\n" if $opt->{debug};
+
+    # processing optional parameters
+    $languages[0] = $opt->{first_lang} if ($opt->{first_lang}); 
+    $languages[1] = $opt->{second_lang} if ($opt->{second_lang}); 
+    my $extractaudiocore = ""; 
+
+#    print STDERR Dumper( $playlist) if $opt->{debug};
+
+    # writing header
+    printf $META "MUXOPT --no-pcr-on-video-pid --new-audio-pes --vbr  --vbv-len=500\n";
+
+    # list of source files to process
+    my $sourceslist = "";
+    for ($ii = 0; $ii < $playlist->{"list_count"}; $ii++) {
+	$pi = $playlist->{"playlistitem"}[$ii];
+	my $tempfile = &catfile ($basedir, "BDMV", "STREAM",  $pi->{"clip_id"} . '.m2ts');
+	if ($sourceslist) {
+#	    $sourceslist = $sourceslist . "+" . '"' . $basedir . "/BDMV/STREAM/" . $pi->{"clip_id"} . '.m2ts' . '"';
+	    $sourceslist = $sourceslist . "+" . '"' . $tempfile . '"';
+	} else {
+#	    $sourceslist = '"' . $basedir . "/BDMV/STREAM/" . $pi->{"clip_id"} . '.m2ts"';
+	    $sourceslist = '"' . $tempfile . '"';
+	}
+	if ($itemilist) {
+	    $itemilist = $itemilist . "+" . $pi->{"clip_id"};
+	} else {
+	    $itemilist = $pi->{"clip_id"} . "";
+	}
+    }
+    my $videorate = undef;
+    my $videowidth;
+    my $videoheight;
+    $pi = $playlist->{"playlistitem"}[0];
+#    print STDERR Dumper( $pi) if $opt->{debug};
+    for ($jj = 0; $jj < $pi->{"stn_num_video"}; $jj++) {
+	my $ss = $pi->{"stn_video"}[$jj];
+	$videorate = &lookup_str($video_rate_map, $ss->{"rate"}) unless ($videorate);
+	$videorate = "23.976" if ($videorate eq "24");
+	my $videoformat = &lookup_str($video_format_map, $ss->{"format"});
+#      print STDERR "videoformat is $videoformat\n" if $opt->{debug};
+	# check video format and set width and height
+	if (($videoformat eq "480i") || ($videoformat eq "480p")) {
+	    $videowidth = "720";
+	    $videoheight = "480";
+	} elsif (($videoformat eq "576i") || ($videoformat eq "576p")) {
+	    $videowidth = "720";
+	    $videoheight = "576";
+	} elsif (($videoformat eq "720i") || ($videoformat eq "720p")) {
+	    $videowidth = "1280";
+	    $videoheight = "720";
+	} elsif (($videoformat eq "1080i") || ($videoformat eq "1080p")) {
+	    $videowidth = "1920";
+	    $videoheight = "1080";
+	} else {
+	    die "Unknown video format " . ":$!\n";
+	}
+#	print STDERR "index is $index\n" if $opt->{debug};
+
+	printf $META "%s, %s, fps=%s, insertSEI, contSPS, track=%04d, mplsFile=%05d\n", 
+	          &lookup_str($tsMuxeR_codec_map, $ss->{"coding_type"}),
+    	          $sourceslist,
+      	          $videorate,
+	          $ss->{"pid"},
+	          $index;
+    }
+    # audio streams
+    for ($jj = 0; $jj < $pi->{"stn_num_audio"}; $jj++) {
+	my $ss = $pi->{"stn_audio"}[$jj];
+	if ($opt->{reduce_streams}) {
+	    # see if first or second language match
+	    next unless (compare_string_array ( $ss->{"lang"}, \@languages)); 
+	}
+
+	# check if preffered audio stream type matches
+
+	# only extract core audio stream if TruHD or DTS-HD
+	$extractaudiocore = "";
+	$extractaudiocore = ", down-to-dts" if (($opt->{extract_core} eq "yes") && (($ss->{"coding_type"} == 133) || ($ss->{"coding_type"} == 134))); 
+	$extractaudiocore = ", down-to-ac3" if (($opt->{extract_core} eq "yes") && (($ss->{"coding_type"} == 131) || ($ss->{"coding_type"} == 132))); 
+
+	printf $META "%s, %s%s, track=%s, lang=%s, mplsFile=%05d\n",
+	&lookup_str($tsMuxeR_codec_map, $ss->{"coding_type"}),
+	$sourceslist,
+	$extractaudiocore,
+	$ss->{"pid"},
+	$ss->{"lang"},
+	$index;
+
+    }
+    # subtitle streams
+    if ($opt->{subtitleconvert}) {
+#	print STDERR "exporting subtitles" if ($opt->{debug});
+	# skip output to meta file, extract and convert them seperately
+	process_subtitles ($opt,
+	    $pi,
+	    $sourceslist,
+	    $videowidth,
+	    $videoheight,
+	    $videorate,
+	    $index,
+	    $itemilist,
+	    $workdir );
+    } else {   
+	for ($jj = 0; $jj < $pi->{"stn_num_pg"}; $jj++) {
+	    my $ss = $pi->{"stn_pg"}[$jj];
+	    #      print STDERR Dumper( $ss) if $opt->{debug};
+
+	    if ($opt->{reduce_streams}) {
+		# see if first or second language match
+		next unless (compare_string_array ( $ss->{"lang"}, \@languages)); 
+	    }
+	    printf $META "%s, %s,bottom-offset=24,font-border=2,text-align=center,video-width=%s,video-height=%s,fps=%s, track=%s, lang=%s, mplsFile=%05d\n",
+	    &lookup_str($tsMuxeR_codec_map, $ss->{"coding_type"}),
+	    $sourceslist,
+	    $videowidth,
+	    $videoheight,
+	    $videorate,
+	    $ss->{"pid"},
+	    $ss->{"lang"},
+	    $index;      
+	}
+    }
+}
+
+sub write_chapter_file () 
+{
+    my $opt = shift;
+    my $filebase = shift;
+    my $dataref = shift; 
+    my $filenumber = shift;
+    my $numtracks = shift;
+    my $header = $dataref->{"header"};
+    my $playlist = $dataref->{"playlist"};
+    my $playitem = $playlist->{"playlistitem"};
+    my $ii;
+    my $plm;
+
+    my $chapterfile;
+    if ($opt->{chapter}) {
+	if ($opt->{chapter} eq "yes") {
+	    $chapterfile = $filebase . "_chapter.txt";
+	} else {
+	    # specified chapter list file
+	    if ($numtracks > 1) {
+		$chapterfile = $opt->{chapter} . "_" . $filenumber . ".txt";
+	    } else {
+		$chapterfile = $opt->{chapter} . ".txt";
+	    }
+	}
+    } else {
+	$chapterfile = $filebase . "_chapter.txt";
+    }
+    open my $CHAP, '>', $chapterfile or die "Unable to open $chapterfile:$!\n";
+
+    for ($ii = 0; $ii < $playlist->{"mark_count"}; $ii++) {
+	$plm = $playlist->{"play_mark"}[$ii];
+	my $jj = $ii + 1;
+	my $min = int($plm->{"abs_start"} / ( 45000 * 60 ));
+	my $hours = int ( ( $min - $min %60 ) / 60 ) ;
+	my $printmin = int( $min %60);
+	my $sec = ($plm->{"abs_start"} - $min * 45000 * 60) / 45000;
+	$sec =~ /(\d{1,2})\.(\d{3})/;
+	(my $printsec, my $millisec) = ($1, $2);
+	printf($CHAP "CHAPTER%02d=%02d:%02d:%02d.%03d\n", $jj, $hours, $printmin, $printsec, $millisec);
+	printf($CHAP  "CHAPTER%02dNAME=Chapter %02d\n", $jj, $jj);
+    }
+
+    close ($CHAP);
+}
+
+sub process_subtitles () 
+{
+    my $opt = shift;
+    my $pi = shift; 
+    my $sourceslist = shift;
+    my $videowidth = shift;
+    my $videoheight = shift;
+    my $videorate = shift;
+    my $index = shift;
+    my $itemlist = shift;
+    my $myworkdir = shift;
+
+    my $subtitlemetafile = $myworkdir . "/" . $opt->{tsMuxeR} . "_" . $index . '_sub.meta' ;
+    open my $SUB, '>', $subtitlemetafile or die "Unable to open $subtitlemetafile:$!\n";
+    # export Subtitles using tsMuxeR
+    print ($SUB "MUXOPT --no-pcr-on-video-pid --new-audio-pes --demux --vbr  --vbv-len=500\n");
+    for (my $jj = 0; $jj < $pi->{"stn_num_pg"}; $jj++) {
+	my $ss = $pi->{"stn_pg"}[$jj];
+#      print STDERR Dumper( $ss) if $opt->{debug};
+	if ($opt->{reduce_streams}) {
+	    # see if firstlang and secondlang match
+	    next unless (($languages[0] eq $ss->{"lang"}) || ($languages[1] eq $ss->{"lang"})); 
+	}
+	printf $SUB "%s, %s,bottom-offset=24,font-border=2,text-align=center,video-width=%s,video-height=%s,fps=%s, track=%s, lang=%s, mplsFile=%05d\n",
+	&lookup_str($tsMuxeR_codec_map, $ss->{"coding_type"}),
+	$sourceslist,
+	$videowidth,
+	$videoheight,
+	$videorate,
+	$ss->{"pid"},
+	$ss->{"lang"},
+	$index;      
+    }
+    close ($SUB);
+    system ($progs->{tsMuxeR}, $subtitlemetafile, '.');
+
+    my $subfps; 
+    if ((defined $opt->{fps}) && 
+	(($opt->{fps} eq "24p") ||
+	    ($opt->{fps} eq "25p") ||
+	    ($opt->{fps} eq "30p"))) {
+	$subfps = $opt->{fps};
+    } else {
+	if (($videorate == 23.976) || ($videorate == 24)) {
+	    $subfps = "24p";
+	} elsif ($videorate == 25) {
+	    $subfps = "25p";
+	} elsif ($videorate == 29.967) {
+	    $subfps = "30p";
+	} else {
+	    $subfps = "keep";
+	}
+    }
+    if ((defined $opt->{videoformat}) && 
+	(($opt->{videoformat} eq "1080") || 
+	    ($opt->{videoformat} eq "720") || 
+	    ($opt->{videoformat} eq "pal") || 
+	    ($opt->{videoformat} eq "ntsc"))) {
+	$videoheight = $opt->{videoformat};
+    }
+    my $sublist = "";
+    for (my $jj = 0; $jj < $pi->{"stn_num_pg"}; $jj++) {
+	my $ss = $pi->{"stn_pg"}[$jj];
+	my $infile = $itemlist . '.track_' . $ss->{"pid"} . '.sup';
+	#my $renfile = $myworkdir . "/" . $opt->{tsMuxeR} . "_" . $index . '_' .  $ss->{"pid"} . '.sup' ;
+	#rename "$infile", "$renfile"; 
+	my $outfile = $opt->{tsMuxeR} . "_" . $index . '_' .  $ss->{"pid"} . '.sub' ;
+	my $langcode = &lookup_str($std::lang_code_map_3_to_2, $ss->{"lang"});
+	$langcode = 'en' unless ($langcode);
+
+	# convert Sup to VOBsub
+	my $command = sprintf "%s -jar %s %s %s /res:%s /dly:0.0 /fps:%s /lang:%s", $progs->{java}, $progs->{BDSup2Sub}, $infile, $outfile, $videoheight, $subfps, $langcode;
+	system ($command);  
+	my $file = &catfile ($myworkdir, $outfile);
+	if ($sublist eq "") {
+	    $sublist = sprintf("\"%s\":%s", $file, $ss->{"lang"});
+	} else {
+	    $sublist = sprintf("%s,\"%s\":%s", $sublist, $file, $ss->{"lang"});
+	}
+    }
+    # export list of subtitle:lang to file
+    my $sublistfile = $myworkdir . '/' . $index . '_avi2mkv_subtitle_list.txt';
+    print STDERR "subtitle file is " . $sublistfile . "\n" if ($opt->{debug});
+    open my $SUBLIST, '>', $sublistfile or die "Unable to open $sublistfile:$!\n";
+    printf ($SUBLIST "avi2mkv_subtitle_list %s\n", $sublist);
+    close ($SUBLIST); 
+}
+
+sub process_tsMuxer_options () 
+{
+    my $opt = shift;
+    my $mplsfile = shift;
+    my $workdir = shift;
+    my $basedir = shift;
+
+#    print STDERR Dumper($mplsfile) if $opt->{debug};
+    print STDOUT "processing tsMuxeR options\n" if ($opt->{debug});
+
+    my $numinputfiles = scalar @{$mplsfile}; 
+    printf(STDERR "number of inputfiles is %s\n", $numinputfiles) if ($opt->{debug});
+
+    my @tracklist;
+    if ($numinputfiles > 1) {
+	if ($opt->{longest}) {
+
+	    # seek longest track
+	    my $duration = 0;
+	    my $longesttrack = 0;
+	    my $ret = 0;
+	    my $playlistref;
+	    for (my $i = 0 ; $i < $numinputfiles ; $i++ ) {
+		$playlistref = $mplsfile->[$i]{"data"}{"playlist"};
+		my $runtime = $playlistref->{"duration"};
+		my $firstitemref = $playlistref->{"playlistitem"}[0];
+		if ( $opt->{filter_short}) {
+		    $ret = &filter_short ($opt, $playlistref, $opt->{seconds});
+		    next unless $ret; 
+		}  
+		if ( $opt->{filter_rep}) {
+		    $ret = &filter_repeats ($opt, $playlistref, $opt->{repeats});
+		    next unless ($ret);
+		} 
+
+		if ( $opt->{filter_dup}) {
+		    $ret = &filter_dup ($opt, $mplsfile, $opt->{dups}, $playlistref);
+		    next unless ($ret);
+		} 
+		# skip playlist items without audio streams
+		next if ($firstitemref->{"stn_num_audio"} < 1);
+		
+		next unless ($runtime);
+		if ($opt->{longest} > 1){
+		    # export meta files for all tracks longer than $opt->{longest} minutes
+		    $ret = &filter_short_minutes ($opt, $playlistref, $opt->{longest});
+		    next unless ($ret);
+		    printf 
+		    push @tracklist, $i; 
+		} else {
+		    if ($runtime > $duration) {
+			$duration = $runtime;
+			$longesttrack = $i;
+		    }
+		}
+	    }
+	} else {
+	    # create a meta file for each track in list (same filters as with the display options)
+	    for (my $i = 0 ; $i <= $numinputfiles ; $i++ ) {
+		my $playlistref = $mplsfile->[$i]{"data"}{"playlist"};
+		if ($opt->{filter_short}) {
+		    my $ret = &filter_short ($opt, $playlistref, $opt->{seconds});
+		    next unless $ret; 
+		}  
+
+		if ($opt->{filter_rep}) {
+		    my $ret = &filter_repeats ($opt, $playlistref, $opt->{repeats});
+		    next unless ($ret);
+		} 
+
+		if ( $opt->{filter_dup}) {
+		    my $ret = &filter_dup ($opt, $mplsfile, $opt->{dups}, $playlistref);
+		    next unless ($ret);
+		} 
+		push @tracklist, $i;
+	    }
+	}
+    } else {
+	# output single meta file
+	$tracklist[0] = 0;
+    }
+
+    print STDERR Dumper( @tracklist) if ($opt->{debug});
+    foreach (@tracklist) {
+	# exporting tsMuxeR meta file
+	my $metafile;
+	print "track id is " . $_ . "\n" if ($opt->{debug});
+	my $playlistref = $mplsfile->[$_]{"data"}{"playlist"};
+	my $filebase;
+	if (scalar (@tracklist) > 1) {
+#	    $filebase = sprintf "%s/%s_%s", $workdir, $opt->{tsMuxeR},$mplsfile->[$_]{"filenumber"};
+	    $filebase = catfile( $workdir, $opt->{tsMuxeR} . "_" . $mplsfile->[$_]{"filenumber"});
+	} else {
+#	    $filebase = sprintf "%s/%s", $workdir, $opt->{tsMuxeR};
+	    $filebase = catfile ($workdir, $opt->{tsMuxeR});
+	}
+
+	$metafile = $filebase . '.meta' ;
+	open my $META, '>', $metafile or die "Unable to open $metafile:$!\n";
+#	print STDERR "file number is " .  $mplsfile->[$_]{"filenumber"} . "\n" if $opt->{debug};
+	&write_tsMuxeR_meta_file ($opt, $META, $playlistref, $mplsfile->[$_]{"filenumber"}, $workdir, $basedir);
+	close ($META);
+	my $ts_outputfile = catfile(curdir(),$opt->{tsMuxeR} . "_" . $mplsfile->[$_]{"filenumber"} . ".ts");
+	system ($progs->{tsMuxeR}, $metafile,  $ts_outputfile) if (($opt->{start_tsMuxeR}) && (-x $progs->{tsMuxeR}));
+
+	# exporting chapter list
+	&write_chapter_file($opt, $filebase, $mplsfile->[$_]{"data"}, $mplsfile->[$_]{"filenumber"}, $#tracklist);
+    }
+}
+
+sub check_directories ()
+{
+    my $opt = shift;
+    my $pathtext = shift; 
+    my $workdir = shift;
+    my $basedir;
+
+    if (-d $pathtext . '/BDMV') {
+	chdir $pathtext;
+
+	$basedir = &canonpath( cwd());
+	print STDERR "basedir is  $basedir\n";
+	chdir $workdir;     
+    } elsif (-d 'BDMV') {
+	$basedir = &canonpath( $workdir );
+    } elsif (-d '../BDMV') {
+	chdir '..';
+	$basedir = &canonpath( cwd());
+	chdir $workdir;
+    } elsif (-d '../../BDMV') {
+	chdir '../../'; 
+	$basedir = &canonpath( cwd());
+	chdir $workdir;
+    } else {
+	# not inside of a BluRay directory structure
+	($opt->{name}, $opt->{path}, $opt->{suffix}) = fileparse($pathtext, qr{\..*});
+	$opt->{path} =~ s/PLAYLIST[\/]?//;
+	$opt->{path} =~ s/BDMV[\/]?//;
+	$basedir = &canonpath($opt->{path});
+	# making this a full path
+	chdir $basedir;
+	$basedir = &canonpath( cwd());    
+	chdir $workdir;      
+    }
+    $basedir;
+}
+
+# read config file if present 
+my $configfile = &check_config ();
+print STDERR "config file is $configfile\n" if $opt->{debug};
+if ($configfile) {
+    &read_config ($configfile, \@languages, $progs);
+#   print STDERR Dumper (%$progs);
+   # getting values specific to bluray-info   
+    open my $CONF, '<', $configfile or 
+   	die "could not open config file $configfile for reading\n";
+    my @config = <$CONF>;
+#   print STDERR Dumper (@config) if $opt->{debug};
+    close $CONF;
+    $opt->{debug}           = &grep_config_value ("debug", \@config, $configfile); 
+    $opt->{repeats}         = &grep_config_value ("bluray_repeats", \@config, $configfile); 
+    $opt->{seconds}         = &grep_config_value ("bluray_seconds", \@config, $configfile);
+    $opt->{dups}            = &grep_config_value ("bluray_dups", \@config, $configfile);
+    $opt->{chapter}         = &grep_config_value ("bluray_chapter", \@config, $configfile); 
+    $opt->{subtitleconvert} = &grep_config_value ("bluray_subtitleconvert", \@config, $configfile); 
+    $opt->{subtitleconvert} = 1 if ($opt->{subtitleconvert} eq "yes");
+    $opt->{subtitleconvert} = 0 if ($opt->{subtitleconvert} eq "no");
+    $opt->{fps}             = &grep_config_value ("bluray_fps", \@config, $configfile); 
+    $opt->{fps} = "" if ($opt->{fps} eq "keep");
+    $opt->{videoformat}     = &grep_config_value ("bluray_videoformat", \@config, $configfile); 
+    $opt->{videoformat} = "" if ($opt->{videoformat} eq "keep");
+    $opt->{reduce_streams}  = &grep_config_value ("bluray_reduce_streams", \@config, $configfile); 
+    $opt->{extract_core}    = &grep_config_value ("bluray_extract_core", \@config, $configfile); 
+    $opt->{start_tsMuxeR}    = &grep_config_value ("bluray_start_tsMuxeR", \@config, $configfile); 
+    $opt->{start_tsMuxeR} = 1 if ($opt->{start_tsMuxeR} eq "yes");
+    $opt->{start_tsMuxeR} = 0 if ($opt->{start_tsMuxeR} eq "no");
+}
+$opt->{debug}   = ""  unless ($opt->{debug} eq "yes");
+$opt->{repeats} = 1 unless ($opt->{repeats});
+$opt->{seconds} = 300 unless ($opt->{seconds});
+$opt->{dups} = 1 unless ($opt->{dups});
+print STDERR "seconds is $opt->{seconds}, repeats is $opt->{repeats}, dups is $opt->{dups}\n" if $opt->{debug};
+
+# parse command line arguments if present
+&init($opt);
+
+print STDERR "Verbose mode ON.\n" if $opt->{verbose};
+print STDERR "Debugging mode ON.\n" if $opt->{debug};
+
+die "No file for parsing given. use $0 -h for usage information" unless (@ARGV > 0); 
+
+#print STDERR Dumper( %$opt) if $opt->{debug};
+# Check if Dependencies are available
+if ($opt->{subtitleconvert}) {
+    unless ((-e $progs->{java}) && (-f $progs->{BDSup2Sub}) && (-e $progs->{tsMuxeR})) {
+	delete ($opt->{subtitleconvert}) ;
+	delete ($opt->{fps}) if ($opt->{fps});
+	delete ($opt->{videoformat}) if ($opt->{videoformat});
+	printf STDERR "ERROR: Subtitle conversion is depending on external programs\n";
+	printf STDERR "       of which at least one is not available.\n";
+	printf STDERR "ERROR: Deactivating subtitle conversion!\n";
+    }
+}
+if ($opt->{start_tsMuxeR}) {
+    delete ($opt->{start_tsMuxeR}) unless (-X "$progs->{tsMuxeR}");
+}
+
+# Check options for consistency
+# if one of the options for subtitle conversion is explicitely given, activate it if the user forgot it.
+if (($opt->{videoformat}) || ($opt->{fps})) {
+    $opt->{subtitleconvert} = 1 unless ($opt->{subtitleconvert});
+}
+# when any of the options requiring tsMuxeR is explicitely given, activate tsMuxeR if not present
+if (($opt->{reduce_streams}) || ($opt->{extract_core}) || 
+    ($opt->{preferred_audio}) || ($opt->{second_lang}) || 
+    ($opt->{chapter}) || ($opt->{subtitleconvert}) ||
+    ($opt->{first_lang}) || ($opt->{longest}) || ($opt->{start_tsMuxeR})) {
+    $opt->{tsMuxeR} = "dummy" unless (defined $opt->{tsMuxeR});
+}
+
+# setting standard path variables
+my $workdir =  &canonpath( &cwd());
+my $basedir = "";
+foreach (@ARGV) {
+    if (-d $_) {
+	# processing all files in source directory
+	$basedir = &check_directories ($opt, $_, $workdir);
+	unless (defined $opt->{item}) {
+	    # process all contents of directory
+	    my $dir = &catdir( $basedir, 'BDMV', 'PLAYLIST');
+	    opendir(my $DIR, $dir) || die "Can't open directory " . $basedir . ".\n";
+
+	    my @files = readdir ($DIR);
+	    closedir($DIR);
+	    foreach my $filepath (@files){
+		next if (($filepath eq ".") || ($filepath eq ".."));
+		my $file = &catfile( $basedir, 'BDMV', 'PLAYLIST', $filepath);
+		&read_mpls_file ($opt, $file);
+	    }
+	} else {
+	    # process only selected title if it is a valid number
+	    die "please specify a valid Playlist item number (NOT the filename)\n" unless ($opt->{item} =~ /^\d{1,5}$/);
+	    my $playlistfile = sprintf "%05d.mpls", $opt->{item};
+	    my $file =  &catfile( $basedir, 'BDMV', 'PLAYLIST', $playlistfile);
+	    print STDERR "playlistfile is " . $file . "\n"; 
+	    &read_mpls_file ($opt, $file);
+	}
+    } else {
+	$basedir = &check_directories ($_, $workdir);
+
+	&read_mpls_file ($opt, $_);
+    }
+}
+
+&process_tsMuxer_options ($opt, $mplsfile, $workdir, $basedir) if ($opt->{tsMuxeR});
+
+# vim: set shiftwidth=4 tabstop=8 softtabstop=4 noexpandtab nosmarttab

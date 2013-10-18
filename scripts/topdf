@@ -1,0 +1,44 @@
+#!/usr/bin/perl
+use strict;
+use Data::Dumper;
+use File::Basename;
+
+my %groups;
+my @single;
+my $input = "Joe Hisaishi Collection";
+my $output = "Joe Hisaishi Collection.pdf";
+
+chdir $input or die "${input}: $!\n";
+
+for my $file (`find -type f`) {
+    chomp $file;
+    if ($file =~ m/^(.*?\S)\s*-?\s*(\d+)\.\w{3}$/) {
+        exists $groups{$1} or $groups{$1} = {};
+        $groups{$1}->{$2} = $file;
+    } else {
+        push @single, $file;
+    }
+}
+
+$output = "../${output}";
+system qw(mkdir -p), $output;
+
+for my $g (sort { $a cmp $b } keys %groups) {
+    my $pdf = "${output}/${g}.pdf";
+    system qw(mkdir -p), $output.'/'.dirname($g);
+    my @files = map { $groups{$g}->{$_} } sort { $a <=> $b } keys $groups{$g};
+    print "${pdf}\n";
+    system 'convert', @files, $pdf;
+    $? && do {
+        print "Warning: skipping convert due to errors, will copy original files!\n";
+        push @single, @files;
+        system 'rm', $pdf;
+    }
+}
+
+for my $file (@single) {
+    system qw(cp -a --parents), $file, $output;
+    $? && die "Shell terminated with error $?\n";
+}
+
+#print Dumper(\%groups);

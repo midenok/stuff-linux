@@ -1,0 +1,24 @@
+#!/bin/bash
+DEBUG_LEVEL=/proc/acpi/debug_level
+DEBUG_LAYER=/proc/acpi/debug_layer
+ACPI_EVENTS=4
+ACPI_NAMESPACE=0x10
+ACPI_OS_SERVICES=0x400
+ACPI_LV_OPREGION=0x800
+ACPI_LV_NAMES=0x00000400
+ACPI_LV_FUNCTIONS=0x00200000
+ACPI_LV_MUTEX=0x01000000
+debug_off()
+{
+    echo 0 > $DEBUG_LEVEL
+    echo 0 > $DEBUG_LAYER
+    grep -v evregion /tmp/kern.log > /tmp/kern2.log
+}
+trap debug_off INT
+
+echo $((0xffffffff-ACPI_LV_OPREGION-ACPI_LV_MUTEX)) > $DEBUG_LEVEL
+echo $((ACPI_EVENTS+ACPI_OS_SERVICES)) > $DEBUG_LAYER
+#echo $ACPI_LV_NAMES > $DEBUG_LEVEL
+#echo $ACPI_NAMESPACE > $DEBUG_LAYER
+# ev_queue_notify_reques: Dispatching Notify(80)
+tail -s 0.3 -n 0 -f /var/log/kern.log|tee /tmp/kern.log

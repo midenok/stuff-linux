@@ -1,0 +1,3 @@
+# TODO: make a loop around this
+# NB: check the list first and add exceptions
+deborphan --guess-interpreters --libdevel|xargs -n100 apt-get purge -y

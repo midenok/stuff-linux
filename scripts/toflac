@@ -1,0 +1,12 @@
+#!/bin/sh
+[ -d "$1" ] || { echo 'Argument must be dir!' >&2; exit 1; }
+
+outdir="${1%%.ape}.flac"
+[ -d "${outdir}" ] || mkdir "${outdir}" || exit $?
+pacpl -r -p -t flac -k --outdir "${outdir}" --delete "$1"
+# FIXME: guard ' in filenames
+# FIXME: create subdirs before move
+find "$1" -type f -exec bash -c "f='{}'; mv \"\$f\" \"${outdir}\${f##$1}\"" ';'
+f=$(find "$1" -type f -print -quit)
+[ -n "$f" ] && { echo "Source files still exist: ${f}" >&2; exit 1; }
+rm -rf "$1"

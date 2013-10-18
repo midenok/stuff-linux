@@ -1,0 +1,7 @@
+#!/bin/sh
+CWD=$(pwd)
+cd /var/run
+find -type d -exec [ \! -d '/lib/init/rw/var.run-static/{}' ] ';' -exec cp -a '{}' /lib/init/rw/var.run-static ';'
+cd /lib/init/rw/var.run-static
+find -depth -type d -exec [ \! -d '/var/run/{}' ] ';' -delete
+cd "$CWD"

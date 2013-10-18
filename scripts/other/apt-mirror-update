@@ -1,0 +1,25 @@
+#!/bin/bash
+APTMOVE_CONF=$(cat /var/lib/dpkg/info/apt-move.conffiles)
+
+die() { echo $1; exit 1; }
+
+[ -f "$APTMOVE_CONF" ] || die "Can't find apt-move.conf!"
+
+source $APTMOVE_CONF
+# /var/lib/apt/local
+[ -d "$LISTSTATE" ] || die "Can't find LISTSTATE dir!"
+# /var/cache/apt/archives
+[ -d "$FILECACHE" ] || die "Can't find FILECACHE dir!"
+[ -z "$DIST" ] && DIST=unstable
+[ -z "$PKGTYPE" ] && PKGTYPE=binary
+
+DEB_BUILD_ARCH=$(dpkg-architecture -qDEB_BUILD_ARCH)
+PACKAGES_NAME=cache_debian_dists_${DIST}_main_${PKGTYPE}-${DEB_BUILD_ARCH}_Packages
+LOG_FILE=/var/log/apt-mirror-update.log
+echo -n > $LOG_FILE
+
+# OVERRIDE_FILE=$LISTSTATE/lock
+# [ -e "$OVERRIDE_FILE" ] || touch $OVERRIDE_FILE
+dpkg-scanpackages -m $FILECACHE > $LISTSTATE/$PACKAGES_NAME 2>$LOG_FILE
+apt-move -c ${APTMOVE_CONF} update | tee -a $LOG_FILE
+rm $LISTSTATE/$PACKAGES_NAME

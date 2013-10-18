@@ -1,0 +1,1108 @@
+#!/usr/bin/perl
+# menc
+# Recode movies in (nearly) every format to h.264 video and copy audio or recode to 2 channel .mp3 or .aac.
+# Put them into .avi, .mp4 or .mkv containers. 
+#
+# mplayer has to be compiled with "export LINGUAS=en" for correct file format detection
+#
+# Depends on: avi2mkv version 1.1.0 or newer (http://blog.fangornsrealm.eu/avi2mkv/)
+#             choose_video_parameters version 0.2.0 or newer (http://blog.fangornsrealm.eu/choose_video_parameters/)
+#             toolbox_fangorn (http://blog.fangornsrealm.eu/toolbox_fangorn/)
+#             mplayer/mencoder with x264 and libmp3lame support (http://www.mplayerhq.hu)
+#             ffmpeg (http://ffmpeg.org/download.html)
+#
+# Author: fangorn (at forums.gentoo.org)
+#
+# Licence: GPL (dependencies might differ), use at your own risk, no warranties.
+# 
+# Requests: These all are features that I use on a regular basis. If you can think of another cool feature, 
+#           don't hesitate to contact me. Also you can look for updated versions at 
+#           http://forums.gentoo.org/viewtopic-t-744041-start-0-postdays-0-postorder-asc-highlight-.html 
+#           or at the project page at http://fangornsrealm.eu
+#
+# Feature list:
+#    process audio/video sources from various container formats
+#    reencode video to h.264 (MPEG4 AVC)
+#    copy audio or convert to MP3
+# 20090822
+#    optionally crop black borders
+# 20091027 
+#    optionally specify video bitrate on the command line
+#    optionally add black borders to get 16/9 aspect ratio after cutting black borders
+#    optionally pass raw, preformatted, unsupported commands to mencoder
+# 20091025
+#    optionally use specific encoding profiles, including x264 encoding parameters, 
+#                      video scaling, audio encoding and output container 
+# 20091027 
+#    outsourced muxing to avi2mkv. Therefore muxing to different output containers is possible. 
+# 20091123 
+#    automatically copy title name information from WMV to MKV
+# 20100128 
+#    temporary files are now processed in a subdirectory (placing of the subdirectory is configurable)
+#    output file is placable in a directory different from the current working directory (configurable)
+#    optionally specify the name of the output movie
+# 20100206
+#    automatically scale video size to restrictions of the selected x264 video preset/playback device
+#    optionally specify output video width and/or height on the command line
+#                     should only one parameter be given, video is scaled to calculated value given by specified value and source aspect ratio
+#                     and black borders are added if the selected x264 video preset/playback device demands it
+#    automatically check video bitrate against x264 preset limits 
+#                     (through choose_x264_encoding_parameters.sh version 0.2.0 or newer)
+# 20100509
+#    configuration file handling
+#    optionally give multiple input files on command line
+#    optionally override video encoding parameters with own mencoder -ovc encoder -<options> line
+#    process multiple audio streams of specifyable language(s)
+#    automatically select streams of preffered language(s) if stream information is available in source
+#    automatic chapter handling if information is available in source
+#    optionally pass options to avi2mkv 
+#    supports encoding of MPEG Transport Streams now!
+# 20100515
+#    optionally hardcode default subtitle to the video stream
+#    automatically cleans temporary directory if muxing succeeded and program is not in debug mode
+# 20100616
+#    optionally exporting subtitles from Matroska sources
+#    optionally exporting subtitles from MPEG Transport Stream sources
+#    optionally converting SUP subtitles to vobsub
+# 20110703
+#    now works with strange file names containing whitespace and other non-filename characters
+#    accepts source files from other directories now (with absolute or relative path specifications)#    
+# 20110723
+#    optionally specify a subtitle list passed to avi2mkv (in a file formatted as the 
+#          output of bluray-info or as a text string containing the comma (,) separated 
+#          list of subtitle files and language codes separated by colon (:))
+# 20110807
+#    optionally specify an external file containing chapter marks that is passed to avi2mkv
+#          (in case the input container does not support chapter marks or they are not written) 
+#
+# Todo: 
+#       - support interlaced detection when mediainfo is present
+#       - support for hardcoding subtitles (not only over raw input commands)
+# 
+# Changelog: 20090713 reducing mplayer -identify runs to one (should improve startup time)
+#            20090822 changed default for unknown audio format to copy instead of convert
+#            20090822 added suppport for cropping black borders
+#            20091025 - centralized selection of video height for standard TV size videos
+#                     - added support for encoding profiles, including x264 encoding parameters, 
+#                       video scaling, audio encoding and output container 
+#            20100206 outsourced video scaling calculation to choose_x264_encoding_parameters.sh (version 0.2.0 or newer)
+#            3.0.0    rewritten in Perl
+#                     fixed errors in exotic audio processing
+#            3.0.2    adjusted to changes in toolbox_fangorn 0.3.0
+#            3.0.3    fixed bugs in configuration file handling
+#            3.0.5    fixed a bug in filename handling
+#            3.0.6    fixed a bug in language passing to avi2mkv
+#            3.0.7    fixed a bug in stream handling
+#            3.1.0    new order of parameters in choose_video_parameters, you need to use following versions of the other tools
+#            3.2.0    working under Windows now
+#                     working in UNIX/Linux anyway. Working on Mac OS X possibly, but not tested
+#                     fixed passing subtitle list to avi2mkv 
+#                     added option to override encoding mode to single pass video encoding
+#
+#                   menc                     3.1.0 or newer
+#                   avi2mkv                  2.2.0 or newer
+#                   toolbox_fangorn          0.4.0 or newer
+#                   choose_video_parameters  0.2.6 or newer
+#            3.2.1    generalized the toolbox_file loading
+#                        (the user does not have to edit the program any more)
+#               
+#
+# Known issues: 
+#
+
+my $Versionnumber = "3.2.1";
+
+my $os = $^O;                 # automatic OS detection, do not change!
+my $toolbox;
+my $progs = {};
+my @mplayer_info;
+
+#####################################################################################################
+# Settings to be edited by the user                                                                 #
+#####################################################################################################
+# Paths to necessary programs. If your's differ, adjust.
+# this one is needed to be correct. Else everything will fail.
+
+BEGIN {
+    my $os2 = $^O;
+    if ($os2 =~ m/MSWin/) {
+        push @INC, "c:/fangorn/";
+	$toolbox = "toolbox_fangorn.pl";
+    } else {
+        push @INC, "/usr/local/bin";
+	my $login = getlogin || getpwuid($<);
+        push @INC, "/home/$login/bin" if ($login);
+        push @INC, "/usr/bin";
+	$toolbox = "toolbox_fangorn";
+    }    
+}
+
+#####################################################################################################
+# Default settings (function may break if changed)                                                  #
+#####################################################################################################
+
+# Default settings
+my @languages; 
+my @mplayer_info;
+my @ffmpeg_info;
+my %progs;
+my $LOG;
+my $opt = {
+    "video_height" => 576,     # height of video in pixels. PAL=576, NTSC=480
+    "TMPPATH" => "",           # Path to store temporary files (Default: current working directory)
+    "OUTPUTPATH" => "",        # Path to store output files (Default: current working directory)
+    "twopass" => "no",
+    "interlaced" => "no",
+    "widescreen" => "no",
+    "audiotarget" => "copy",
+    "reverse" => "no", 
+    "noise_reduction" => "no",
+    "cropborders" => "no",     # crop black borders? 
+    "expandvideo" => "no",     # crop black borders and afterward expand video to 16/9 aspect ratio?
+    "profile" => "nq",         # 
+    "BITRATE" => 0,
+    "filter" => "",
+    "nosub" => " -nosub ",
+    "containerformat" => "mkv",
+    "override_video_encoder" => "",
+    "rawcommand" => "",
+    "targetwidth" => "",
+    "targetheight" => "",
+    "resize" => "no",          # resize video
+    "CROP" => "",
+    "firstpass" => "",
+    "secondpass" => "",
+    "titlestring" => "",
+    "convertsup" => "yes",
+    "filename" => "",         # userprovided moviename
+    "format"  => "",
+    "audioconvert"  => "",
+    "abitrate"  => "",
+    "avi2mkv_pass_languages" => "",
+    "normalizeaudio"  => "",
+    "setaudiovolume"  => "",
+    "converttostereo"  => "",
+    "avi2mkv_title"  => "",
+    "avi2mkv_widescreen"  => "",
+    "avi2mkv_chapters"  => "",
+    "subtitles"  => "",
+    "avi2mkv_secondaudioopts"  => "",
+    "avi2mkv_sourcefile"  => "",
+    "externalsubopts" => "",
+    "sublistfile" => "",
+};
+
+use warnings;
+use strict;
+use feature 'switch';
+use Cwd;
+use File::Basename;
+use File::Copy;
+use File::Spec::Functions;
+
+use Data::Dumper;
+$Data::Dumper::Purity = 1;
+use POSIX qw(locale_h);
+my $old_locale = setlocale(LC_CTYPE);
+setlocale(LC_CTYPE, "C");
+
+require $toolbox;
+
+sub help_text {
+    my $prog = $0; 
+    if ( $os =~ /MSWin.*/) {
+	$prog =~ s/^.*\\//;
+    } else {
+	$prog =~ s{^.*/}{};
+    }
+    print STDERR << "EOF";
+    $prog Version $Versionnumber
+
+Program to convert nearly any media format to h.264 video stream with MP3, AAC or copied audio stream(s). 
+Output is AVI, MP4 or MKV. It is possible to use 2-pass encoding and to reverse audio stream 
+order in output file.
+
+usage $prog [options] moviename
+    --use_avi_output|-a 
+	       avi only (skip matroska creation and scale anamorphic video to 1024:576)
+    --outputpath|--op
+	       specify output directory (Default: current working directory)
+    --tmppath
+	       specify the path for temporary files
+    --twopass|-2
+	       two pass encoding
+    --singlepass
+	       single pass encoding
+    --override_video_encoder <encoder command>
+	       use own encoder configuration instead of x264
+	       this overrides anything - including bitrate settings - besides the one- or twopass setting 
+	       and any video filters applied. Tested encoders are xvid and all lavc encoders. Others might work.
+	       Examples: 
+	       XVID
+	       -ovc xvid -xvidencopts bvhq=1:chroma_opt:quant_type=mpeg:bitrate=658
+	       DIVX
+	       -ffourcc DX50 -ovc lavc -lavcopts vcodec=mpeg4:vbitrate=2000:vhq:keyint=15
+    --raw_mencoder_command|-R <rawcommands> 
+	       raw comamnds for mencoder to process. For instance to hardcode a subtitle do something like this
+		  -R "-fontconfig -font \"Arial Black\" -subfont-text-scale 2.7 -sub-bg-alpha 150 -subpos 97 -subcp cp1250 -sub <subfile>"
+    --title|-t <title>   
+	       specify a name other than the original file name
+   Audio processing:
+    --single_audio|-1         
+	       use single audio stream only (uses first language if available, else 
+	       second language or if this is also not available the default stream)
+    --convert_to_mp3|-m
+	       encode single audio stream to mp3 instead of copying
+	       (helps with faulty audio streams which else just prohibit the encoding)
+    --reverse_audio_streams|-r 
+	       second language first in Matroska output
+    --language|-l <3-digit languagecode>
+	override language definitions in script / config file 
+	issue multiple times for multiple languages!
+	Valid language codes are just the ones available as 3-digit AND 2-digit code!
+
+	Caution: This has to be set before specifying external audio streams!!!
+
+	will be used in the order given on the command line
+	example: english and german audio and english audio commentary would be
+		 --language eng --language ger --language eng
+
+   Video options: 
+    --force_widescreen|-w
+	       ignore any measurements and treat source as 16:9 video
+    --interlaced|-i
+	       If automatic detection fails, force deinterlace 
+    --noise_reduction|-n 
+	       reduce dynamic noise in source (mainly for older productions)
+    --video_bitrate|-b bitrate
+	       give a video bitrate to encode process (default: size dependent)
+    --crop|-c
+	       crop black borders of widescreen movies (Default: Off)
+    --expand_video|-e
+	       expand video frame to 16/9 aspect ratio after cropping black borders (Default: Off)
+    --expand_if_cropped|-E
+	       automatically crop black borders and expand to 16/9 if source is not anamorphic
+    --targetwidth|-W
+	       specify video geometry/width of output video (if you know the limits of the device to play the video)
+    --targetheight|-H
+	       specify video geometry/height of output video (if you know the limits of the device to play the video)
+
+    --x264_encoding_preset|-p preset
+	       x264 video encoding profile preset (Default: hq) 
+    --x264_encoding_preset|-p list 
+	       lists all available profile presets   
+    --fix_subtitle
+	       make default subtitle hardcoded into the video. 
+	       (Default: subtitles are extracted from supported containers and muxed if output container supports it)
+
+   Subtitle options:
+    --process_subtitles|-S  
+	 extract subtitles from source when present (Warning: slow)
+    --convert_sup
+	 convert all SUP subtitles to vobsub format
+    --subtitle_list_to_avi2mkv|--sublist <filename|list>
+         pass a list of subtitles to avi2mkv (as a file from bluray-info 
+	 or as comma separated list of <filename>:<languagecode>)
+
+   Options passed to avi2mkv for merging:
+    --mp4mux|--mp4|-4 
+	       mux to ISO MP4 container instead of Matroska
+    --ogmmux|--ogm 
+	       mux to OGM container instead of Matroska
+    --tsmux|--ts 
+	       mux to MPEG Transport Stream container instead of Matroska
+    --mp3_audio|--a3|-3 
+	       convert audio to MPEG1 Layer3 before muxing
+    --aac_audio|--aa  
+	       convert audio to AAC before muxing
+    --ogg_audio|--ao  
+	       convert audio to Ogg Vorbis before muxing
+    --flac_audio|--af  
+	       convert audio to Flac before muxing
+    --ac3_audio|--aac3  
+	       convert audio to AC3 before muxing
+    --audio_bitrate|--ab
+	       bitrate for audio encoding in kBit/s
+    --audio_normalize|--an
+	       normalize audio 
+    --audio_volume|--av <volume>
+	       Audio volume in dB [-200 to 60 - default is 5]        
+    --audio_twochannel|--a2
+	       force conversion to two channel stereo even if container support multi channe
+    --chapters|-C <filename>
+               give a file with chapter definitions to avi2mkv for muxing
+	       format used is the format mplayer and bluray-info extract from DVD or BluRay
+
+   Special modes:
+    --help|-h  
+	       print this help text
+
+EOF
+    exit 0;
+}
+
+sub init ()
+{
+
+    my $opt = shift;
+    my $languages_cleared = "no";
+    use Getopt::Long qw(:config no_ignore_case bundling);
+    GetOptions( "help|h"  =>                  sub {$opt->{help} = 1;}, 
+	"debug"   =>                  sub {$opt->{debug} = 1;},
+	"single_audio|1" =>           sub {$opt->{singleaudio} = "yes";},
+	"mp4mux|mp4" =>               sub {$opt->{containerformat} = "mp4";},
+	"ogmmux|ogm" =>               sub {$opt->{containerformat} = "ogm";},
+	"tsmux|ts" =>                 sub {$opt->{containerformat} = "ts";},
+	"use_avi_output|a" =>         sub {$opt->{containerformat} = "avi";},
+	"mp3_audio|a3" =>             sub {$opt->{audiotarget} = "mp3";},
+	"aac_audio|aa" =>             sub {$opt->{audiotarget} = "aac";},
+	"ogg_audio|ao" =>             sub {$opt->{audiotarget} = "ogg";},
+	"flac_audio|af" =>            sub {$opt->{audiotarget} = "flac";},
+	"ac3_audio|aac3" =>           sub {$opt->{audiotarget} = "ac3";},
+	"override_video_encoder=s" => sub {$opt->{override_video_encoder} = $_[1];},
+	"audio_bitrate|ab=i" =>       sub {$opt->{abitrate} = "audio_bitrate " . $_[1];},
+	"audio_normalize|an" =>       sub {$opt->{normalizeaudio} = "audio_normalize";},
+	"audio_volume|av=i" =>        sub {$opt->{setaudiovolume} = "audio_volume " . $_[1];},
+	"audio_twochannel|a2" =>      sub {$opt->{converttostereo} = "audio_twochannel";},
+	"interlaced|i" =>             sub {$opt->{interlaced} = "yes";},
+	"twopass|2" =>                sub {$opt->{twopass} = "yes";},
+	"singlepass" =>               sub {$opt->{twopass} = "no";},
+	"raw_mencoder_command|R=s" => sub {$opt->{raw_mencoder_command} = $_[1];},
+	"language|l=s" => sub {if (($_[1] =~ m/^\w{3}$/) && (&find_language($_[1])) ) {
+		if ($languages_cleared eq "no") {
+		    for (my $i = 0; $i < @languages; $i++) {
+			delete $languages[$i]; 
+		    }
+		    $languages_cleared = "yes";
+		}
+		push (@languages, $_[1]);
+		$opt->{avi2mkv_pass_languages} = $opt->{avi2mkv_pass_languages} . " --language " . $_[1];
+	    }
+	},
+	"crop|c" =>                   sub {$opt->{crop} = "yes";},
+	"expand_video|e" =>           sub {$opt->{expandvideo} = "yes";$opt->{crop} = "yes";},
+	"force_widescreen|w" =>       sub {$opt->{widescreen} = "yes";},
+	"process_subtitles|S"   =>    sub {$opt->{process_subtitles} = "yes"; },
+	"subtitle_list_to_avi2mkv|sublist=s" => sub {if (-f "$_[1]") {
+	                                                 $opt->{sublistfile} = $_[1];
+						     }
+						     else {
+						         $opt->{externalsubopts} = $_[1];
+						     } 
+						    },
+	"convert_sup"           =>    sub {$opt->{convertsup} = "yes"; },
+	"targetwidth|W=i" =>          sub {$opt->{targetwidth} = $_[1];},
+	"targetheight|H=i" =>         sub {$opt->{targetwheight} = $_[1];},
+	"expand_if_cropped|E" =>      sub {$opt->{expandif} = "yes";},
+	"reverse_audio_streams|r" =>  sub {$opt->{secondaudiofirst} = "yes";},
+	"title|t=s" =>                sub {$opt->{title} = $_[1];},
+	"noise_reduction|n" =>        sub {$opt->{noiseredction} = "yes";},
+	"video_bitrate|b=i" =>        sub {$opt->{BITRATE} = $_[1];},
+	"x264_encoding_preset|p=s" => sub {$opt->{profile} = $_[1];},
+	"outputpath|op=s"          => sub {$opt->{OUTPUTPATH} = $_[1];},
+	"tmppath=s"          =>       sub {$opt->{TMPPATH} = $_[1];},
+	"fix_subtitle"       =>       sub {$opt->{nosub} = "";},
+	"chapters|C=s"             => sub {$opt->{chapterfile} = $_[1] if (-f $_[1]);},
+    );
+
+    &help_text () if ($opt->{help}); 
+}
+
+sub check_input_file ()
+{
+    my $opt = shift;
+    my $inputfile = shift;
+    my $workdir = shift;
+    unless ( $inputfile ) {
+	unless ($opt->{profile} eq "list" ) {
+	    help_text();
+	}
+    }
+    unless ( -f "$inputfile" ) {
+	print STDERR "Please specify an existing file as input\n";
+	exit 1;
+    }
+    if ($opt->{filename} ) {
+	$opt->{moviebase} = $opt->{filename};
+	$opt->{moviename} = $opt->{moviebase} . ".mkv";
+	if ( -f $opt->{moviename} ) {
+	    $opt->{moviename}=$opt->{moviename} . ".mkv";
+	} 
+    } else {
+	$opt->{file} = $inputfile;
+	($opt->{moviebase}, $opt->{path}, $opt->{suffix}) = fileparse($opt->{file},qr{\.\w+});
+	$opt->{moviename} = $opt->{moviebase} . ".mkv";
+	if ( -f "$opt->{moviename}" ) {
+	    $opt->{moviename} = $opt->{moviename} . ".mkv";
+	}   
+    }
+
+    &check_temporary_directory ($opt, $opt->{moviebase});
+
+    # outputpath must exist
+    if ( $opt->{OUTPUTPATH} ) {
+	if ( -d "$opt->{OUTPUTPATH}") {
+	    $opt->{OUTDIR} = &canonpath ( $opt->{OUTPUTPATH} );
+	} else {
+	    $opt->{OUTDIR} = $workdir;
+	}
+    } else {
+	$opt->{OUTDIR} = $workdir;
+    }
+
+    # Dumping mplayer informations to temporary file
+    my $command = sprintf "%s  -identify -frames 0 -vc null -vo null -ao null \"%s\" 2>&1", $progs->{mplayer}, $opt->{file};
+    print $command . "\n" if $opt->{debug};
+    @mplayer_info = `$command`;
+    chomp @mplayer_info;
+
+    $opt->{file_type} = &identify_file ($opt->{file});
+    print "File Type: " . $opt->{file_type} . "\n";
+
+    #getting geometry information
+    &get_movie_parameters ($opt, \@mplayer_info);
+
+   if ( $opt->{file_type} eq "Microsoft ASF" ) {
+       printf STDERR "getting FPS info from WMV file\n" if $opt->{debug};
+       my $command = sprintf "%s -i \"%s\" 2>&1", $progs->{ffmpeg}, $opt->{file};
+       print STDERR $command . "\n" if $opt->{debug};
+       @ffmpeg_info = `$command`;
+       chomp @ffmpeg_info;
+
+       print STDERR Dumper (@ffmpeg_info) if $opt->{debug};
+       ($opt->{SRC_FPS}) =  grep (s/.*->\s+(\d+\.\d+)\s+.*/$1/, @ffmpeg_info);
+       if ($opt->{audiotarget} eq "copy") {
+	   $opt->{audiotarget} = "mp3"; 
+       }
+       ($opt->{titlestring}) = grep (s/title:\s+(.+)\s+/$1/, @mplayer_info);
+	   $opt->{titlestring} = " " unless $opt->{titlestring};
+       print STDERR "movie title string is " . $opt->{titlestring} . "\n" if $opt->{debug};
+   }
+   # For problematic situations. Sometimes fps detection fails, for example for Windows Media files. 
+   # If you are in NTSC countries, change to 29.997
+   unless ( $opt->{SRC_FPS} ) {
+       $opt->{SRC_FPS} = 25;
+   }
+
+   #set aspect ratio of output
+   if ( $opt->{file_type} eq "MPEG Transport Stream" ) {
+       $opt->{SRC_ASPECT} = grep (s/MPEG2\s+\d+x\d+\s+\(aspect\s+(\d+)\)/$1/, @mplayer_info);
+
+       if ( $opt->{SRC_ASPECT} == 3 ) {
+	   # anamorphic
+	   $opt->{aspect} = "--aspect-ratio 0:16/9 ";
+	   if ( $opt->{containerformat} eq "avi" ) {
+	       if ( "" eq $opt->{filter} ) {
+		   $opt->{filter} = " -vf scale=1024:" . $opt->{video_height};
+	       } else {
+		   $opt->{filter} = $opt->{filter} . ",scale=1024:" . $opt->{video_height};
+	       }
+	   }
+       } elsif ($opt->{SRC_WIDTH} == 480) {
+	   # correcting geometry for svcd
+	   $opt->{aspect} = "--aspect-ratio 0:1.33 ";
+	   if ( $opt->{containerformat} eq "avi" ) {
+	       if ( $opt->{filter} eq "" ) {
+		   $opt->{filter} = " -vf scale=704:" . $opt->{video_height};
+	       } else {
+		   $opt->{filter} = $opt->{filter} . ",scale=704:" . $opt->{video_height};
+	       }
+	   }      
+       }  
+   }
+
+   #setting video bitrate depending on the picture size
+   if ( $opt->{BITRATE} == 0 ) {
+       if ( $opt->{SRC_WIDTH} > 1400 ) {
+	   $opt->{BITRATE}=6000;
+       } elsif ( $opt->{SRC_WIDTH} > 1200 ) {
+	   $opt->{BITRATE}=3000;
+       } elsif ( $opt->{SRC_WIDTH} > 1000 ) {
+	   $opt->{BITRATE}=1500;
+       } elsif ( $opt->{SRC_WIDTH} > 700 ) {
+	   $opt->{BITRATE}=1200;
+       } elsif ( $opt->{SRC_HEIGHT} > 450 ) {
+	   $opt->{BITRATE}=800;
+       } else {
+	   $opt->{BITRATE}=500;
+       }
+   }
+   print "FPS: " . $opt->{SRC_FPS} . "\n";
+   print "width: " . $opt->{SRC_WIDTH} . "\n";
+   print "height: " . $opt->{SRC_HEIGHT} . "\n";
+   print "aspect: " . $opt->{SRC_ASPECT} . "\n";
+
+   my $logfile = &catfile( $opt->{TMP}, $opt->{moviebase} . "_mencoder.log");
+   if ( -f $logfile) {
+       print  "logfile already exists, removing it\n";
+       unlink $logfile;
+   }
+   open my $LOG, '>', $logfile or die "Unable to open $logfile:$!\n";
+
+   # Chapter support
+   if (scalar(grep (/chapter/i, @mplayer_info)) > 0) {
+      &extract_chapters ($LOG, $opt, $opt->{TMP}, $opt->{file}, \@mplayer_info);
+   }
+   elsif ($opt->{chapterfile}) {
+       &copy($opt->{avi2mkv_chapters}, &catfile($opt->{TMP}, $opt->{chapterfile}));
+       $opt->{avi2mkv_chapters} = "-c " . $opt->{chapterfile}; 
+   }
+
+   # Subtitle support
+   if (scalar(grep (/subtitle/i, @mplayer_info)) > 0) {
+       &extract_subtitles ($LOG, $opt, $progs, $opt->{file}, $opt->{TMP});
+       print STDERR "subtitle command used for muxing: $opt->{subtitles}\n" if $opt->{debug}; 
+   }
+   return $LOG;
+}
+
+sub prepare_filters ()
+{
+    my $LOG = shift; 
+    my $opt = shift; 
+    my $progs = shift; 
+
+    if ( $opt->{cropborders} eq "yes" ) {
+	&detect_crop ($LOG, $opt, $progs->{mplayer}, $opt->{file});
+    }
+}
+
+sub choose_profile ()
+{
+    my $LOG = shift; 
+    my $opt = shift; 
+
+    my $geometryfilteroptions="";
+    my $expandopt="";
+    my $targetwidthopt="";
+    my $targetheightopt="";
+
+    if ( $opt->{profile} eq "list" ) {
+	system ($progs->{choose_video_parameters}, " -L" );
+	exit;
+    }   
+    if ( $opt->{CROP} ) {
+	$opt->{cropopts} = "-c " . $opt->{CROP};
+    } else {
+	$opt->{cropopts} = "";
+    }   
+    if (( $opt->{targetwidth} ) && ( $opt->{targetheight} )) {
+	# nothing specified
+	$opt->{targetwidthopt} = " -w " . $opt->{SRC_WIDTH};
+	$opt->{targetheightopt} = " -h " . $opt->{SRC_HEIGHT};
+    }
+    elsif (( not $opt->{targetwidth}) && ( $opt->{targetheight} )) {
+	# scale to target width
+	$opt->{expandvideo} = "yes";
+	$opt->{targetwidthopt} = " -w " . $opt->{targetwidth};
+	$opt->{targetheightopt} = "";
+    }
+    elsif (( $opt->{targetwidth} ) && ( not $opt->{targetheight} )) {
+	# scale to target height
+	$opt->{expandvideo} = "yes";
+	$opt->{targetwidthopt} = "";
+	$opt->{targetheightopt} = " -h " . $opt->{targetheight};
+    }   
+    if ( $opt->{expandvideo} eq "yes" ) {
+	$opt->{expandopt} = "-e" ;
+    }   
+    print "calling external program choose_video_parameters\n";
+#    my $videoparameterlog = sprintf "\"%s/%s_x264_encoding_parameters.txt\"", 
+#				     $opt->{TMP}, $opt->{moviebase};
+    my $videoparameterlog = catfile($opt->{TMP},  $opt->{moviebase} . '_x264_encoding_parameters.txt');
+    $opt->{expandopt} = "" unless ($opt->{expandopt});
+    $opt->{cropopts} = "" unless ($opt->{cropopts});
+    my $command = sprintf "%s %s -f %s -p %s %s %s -W %s -H %s %s -B %s \"%s\" ",
+			   $progs->{choose_video_parameters},
+			   $opt->{expandopt},
+			   $opt->{SRC_FPS},
+			   $opt->{profile},
+			   $opt->{targetwidthopt}, 
+			   $opt->{targetheightopt},
+			   $opt->{SRC_WIDTH}, 
+			   $opt->{SRC_HEIGHT}, 
+			   $opt->{cropopts},
+			   $opt->{BITRATE},
+                           $videoparameterlog;
+    print $LOG $command . "\n";
+    system ($command);
+    if ( -1 == $? ) {
+	print $LOG "external call failed. Using default settings.\n";
+	$opt->{encopts} = sprintf "subq=1:bframes=4:weight_b:pass=1:psnr:vbv_maxrate=9500:vbv_bufsize=2000:bitrate=%s",
+	$opt->{BITRATE};
+    } else {
+	print $LOG "external call was successfull\n";
+	open my $VIDOPT, "<" ,$videoparameterlog
+	     or die "Unable to open $videoparameterlog:$!\n";
+	my @data = <$VIDOPT>;
+	($opt->{encopts}) = grep (s/x264encoptions (.+)/$1/, @data );
+#	open my $VIDOPT, "cat -n '$videoparameterlog'|" 
+#	     or die "Unable to open $videoparameterlog:$!\n";
+#	($opt->{encopts}) = grep (s/x264encoptions (.+)/$1/, <$VIDOPT> );
+	chomp $opt->{encopts};
+	if ( $opt->{encopts} eq "" ) {
+	    print $LOG "encoder options by preset are empty. Using default settings.\n";
+	    $opt->{encopts} = sprintf "subq=1:bframes=4:weight_b:pass=1:psnr:vbv_maxrate=9500:vbv_bufsize=2000:bitrate=%s",
+	    $opt->{BITRATE};
+	}      
+	my ($geometryfilteroptions) = grep (s/vf_scale_expand_filter_chain (.+)/$1/, <$VIDOPT> );
+	if ($geometryfilteroptions) {
+	    chomp $geometryfilteroptions;
+	    print $LOG "geometryfilteroptions " . $geometryfilteroptions . "\n";
+	    if ( $geometryfilteroptions ) {
+		$opt->{noisereduction} = "yes";
+		$opt->{SCALE} = $geometryfilteroptions;
+		$opt->{SCALE2} = "spp," . $geometryfilteroptions;
+	    }
+	    print "geometryfilteroptions $geometryfilteroptions\n";
+	    if ( $geometryfilteroptions ) {
+		$opt->{noisereduction} = "yes";
+		$opt->{resize} = "yes";
+		$opt->{filter} = "spp,$geometryfilteroptions";
+	    }
+	}
+    }
+} 
+
+sub build_filter_chain ()
+{  
+    my $LOG = shift; 
+    my $opt = shift; 
+
+    print STDERR "Crop borders? $opt->{cropborders}\n" if $opt->{debug};  
+    if ( $opt->{cropborders} eq "yes" ) {
+	if ( length ($opt->{filter}) == 0 ) {
+	    $opt->{filter}=" -vf crop=" . $opt->{CROP};
+	} else {
+	    $opt->{filter}="crop=" . $opt->{CROP} . "," . $opt->{filter};
+	}   
+    }    
+    #Deinterlace? y/n
+    print STDERR "Deinterlace? $opt->{interlaced}\n" if $opt->{debug};  
+    if ( $opt->{interlaced} eq "yes" ) {
+	if ( length ($opt->{filter}) == 0 ) {
+	    $opt->{filter} = " -vf lavcdeint";
+	} else {
+	    $opt->{filter} = "lavcdeint," . $opt->{filter};
+	}   
+    }    
+    print STDERR "activate noise reduction? $opt->{noise_reduction}\n" if $opt->{debug};  
+    if ( "yes" eq $opt->{noise_reduction} ) {
+	if ( length ($opt->{filter}) == 0 ) {
+	    $opt->{filter} = " -vf hqdn3d=4:3:6";
+	} else { 
+	    $opt->{filter} = $opt->{filter} . ",hqdn3d=4:3:6";
+	}   
+    }
+    if ( $opt->{SRC_FPS} == 50 ) {
+	if ( length ($opt->{filter}) == 0 ) {
+	    $opt->{filter} = " -vf framestep=2";
+	} else { 
+	    $opt->{filter} = $opt->{filter} . ",framestep=2";
+	}   
+	$opt->{SRC_FPS} = 25;
+    }
+
+    print STDERR "video filter is $opt->{filter}\n" if $opt->{debug};  
+}
+
+sub prepare_audio ()
+{
+    my $LOG = shift; 
+    my $opt = shift; 
+
+    my @audio_ids = grep (s/ID_AUDIO_ID=(\d+)\s*/$1/, @mplayer_info);
+    #getting multiple audio
+    # Audio processing parameters
+    unless (@ffmpeg_info) {
+	my $command = sprintf "%s -i \"%s\" 2>&1", $progs->{ffmpeg}, $opt->{file};
+	@ffmpeg_info = `$command`;
+    }
+#   print STDERR Dumper @ffmpeg_info if $opt->{debug};
+    my $maxaudio;
+    my @audiooptions;
+    if (@{$opt->{languages}} > @audio_ids) {
+	$maxaudio = @audio_ids;
+    } else {
+	$maxaudio = scalar(@{$opt->{languages}});
+    }
+    print STDERR "number of maxaudio is $maxaudio\n" if $opt->{debug};
+    if ( @audio_ids > 1 ) {
+	# multiple audio streams
+	print $LOG "Available audio streams: " . join (' ', @audio_ids) . "\n";
+	my @internaltracklist;
+	foreach (@{$opt->{languages}}) {
+	    my $track = &find_audio_stream ($opt->{file_type}, $_, \@mplayer_info);
+	print STDERR "find_audio_stream delivered language $_ to be stream $track\n" if $opt->{debug};  
+	unless ($track eq "no_language_information") {
+	    # language information is available and a stream is found
+	    push (@internaltracklist, $track);
+	    print STDERR "track with language $_ found: $track \n" if $opt->{debug};
+	}
+    }
+    unless (@internaltracklist) {
+	my (@audiostreams) = grep (s/.*-aid\s+(\d+).*/$1/, @mplayer_info );
+	for (my $i = 0;  $i < @audiostreams ; $i++ ) {
+	    $internaltracklist[$i] = $audiostreams[$i];
+	}
+    }
+    my @externalaudio; 
+    for (my $i = 1; $i < $maxaudio; $i++) {
+	my $num = $internaltracklist[$i];
+	print "extracting audio stream $num for later usage\n";
+	my $audioname = sprintf "%s/%s_audio.%s", $opt->{TMP}, $opt->{moviebase}, $num;
+	my $command = sprintf "%s \"%s\" -aid %s -dumpaudio -dumpfile \"%s\"", 
+	                       $progs->{mplayer}, 
+			       $opt->{file}, 
+			       $num, 
+			       $audioname;
+	print $LOG $command . "\n";
+	system ($command);
+	push @externalaudio, $audioname;
+    }
+    $opt->{externalaudio} = \@externalaudio;
+   } else {
+       $opt->{singleaudio} = "yes"; 
+   }
+   if ( $opt->{audiotarget} eq "mp3" ) {
+       $opt->{HAS_SURROUND} = "no";
+       push @audiooptions, " -oac mp3lame -lameopts cbr:br=128:mode=0:aq=0 ";
+       $opt->{audiotarget} = "" if ($opt->{singleaudio} eq "yes");
+   } else {
+       print STDERR "processing audio options\n" if $opt->{debug};  
+       print STDERR "maxaudio is $maxaudio\n" if $opt->{debug}; 
+       print STDERR Dumper @ffmpeg_info if $opt->{debug};
+       my @codecs = grep (s/\s*Stream.*Audio:\s+([\w\d]+).*/$1/, @ffmpeg_info);
+       print STDERR "audiostreams: " . join (';', @codecs) . "\n" if $opt->{debug};
+
+       for (my $i = 0 ; $i <= $maxaudio; $i++) {
+	   print STDERR "audiostreams is $codecs[$i]\n" if $opt->{debug};  
+	   given ($codecs[$i]) {
+	       when (["ac3", "dts", "mp3"]) {
+		   push @audiooptions, " -oac copy";
+	       }
+	       default {
+		   push @audiooptions, " -oac mp3lame -lameopts cbr:br=128:mode=0:aq=0";
+	       }
+	   }
+       }
+   }
+   $opt->{audiooptions} = \@audiooptions;
+   print STDERR "audio options: " . join (';', @{$opt->{audiooptions}}) . "\n" if $opt->{debug};
+}
+
+sub encode_video ()
+{
+    my $LOG = shift; 
+    my $opt = shift; 
+
+    my $firstpass = "";
+    my $secondpass = "";
+    my $videoparams = "";
+    my $nice = " ";
+
+    unless ($os =~ /MSWin/) {
+	$nice = "nice -n 19 ";
+    }
+
+    my $outputfile = &catfile ($opt->{TMP}, $opt->{moviebase} . '_tmp.avi');
+    if (length ($opt->{override_video_encoder}) == 0) {
+	print STDERR "video encoding preset parameters: " . $opt->{encopts} . "\n" if $opt->{debug};
+	$videoparams = sprintf "-ovc x264 -x264encopts %s", $opt->{encopts};
+	if ( $opt->{twopass} eq "yes" ) {
+	    my $passlogfile = &catfile ($opt->{TMP}, $opt->{moviebase} . '_2pass.log');
+	    $firstpass=":pass=1:turbo=2:threads=auto -passlogfile \"" . $passlogfile . "\"";
+	    $secondpass=":pass=2:threads=auto -passlogfile \"" . $passlogfile . "\"";
+	}
+    } else {
+	$videoparams = $opt->{override_video_encoder};
+	print STDERR "user provided video encoding parameters: " . $opt->{encopts} . "\n" if $opt->{debug};
+	if ( $opt->{twopass} eq "yes" ) {
+	    if ($opt->{override_video_encoder} =~ /-lavcopt/) {
+	        my $passlogfile = &catfile ($opt->{TMP}, $opt->{moviebase} . '_2pass.log');
+		$firstpass=":vpass=1 -passlogfile \"" . $passlogfile . "\"";
+		$secondpass=":vpass=2 -passlogfile \"" . $passlogfile . "\"";      
+	    } elsif ($opt->{override_video_encoder} =~ /-xvidopt/) {
+		$firstpass=":pass=1";
+		$secondpass=":pass=2";
+	    } else {
+		$firstpass=":pass=1";
+		$secondpass=":pass=2";
+	    }
+	}
+    }
+    if ( $opt->{twopass} eq "yes" ) {
+	my $command = sprintf "%s %s \"%s\" %s %s %s%s %s -ofps %s %s -o \"%s\"",
+	                       $nice, $progs->{mencoder}, 
+			       $opt->{file}, 
+			       $opt->{filter},
+            	               $opt->{nosub}, 
+			       $videoparams, 
+			       $firstpass,
+			       $opt->{audiooptions}[0],
+	                       $opt->{SRC_FPS}, 
+			       $opt->{rawcommand}, 
+			       $outputfile;
+
+	print $LOG "$command \n";
+	system ($command);
+    }
+    print STDERR "mencoder is $progs->{mencoder}\n" if $opt->{debug}; 
+    print STDERR "file is $opt->{file}\n" if $opt->{debug}; 
+    print STDERR "filter is $opt->{filter}\n" if $opt->{debug}; 
+    print STDERR "nosub is $opt->{nosub}\n" if $opt->{debug}; 
+    print STDERR "videoparams is $videoparams\n" if $opt->{debug}; 
+    print STDERR "secondpass is $secondpass\n" if $opt->{debug}; 
+    print STDERR "audiooptions is ${$opt->{audiooptions}}[0]\n" if $opt->{debug}; 
+    print STDERR "SRC_FPS is $opt->{SRC_FPS}\n" if $opt->{debug}; 
+    print STDERR "rawcommand is $opt->{rawcommand}\n" if $opt->{debug}; 
+    print STDERR "outputfile is $outputfile\n" if $opt->{debug}; 
+    my $command = sprintf "%s %s \"%s\" %s %s %s%s %s -ofps %s %s -o \"%s\"",
+			   $nice, 
+			   $progs->{mencoder},
+			   $opt->{file}, 
+			   $opt->{filter},
+			   $opt->{nosub},
+			   $videoparams,
+			   $secondpass,
+			   $opt->{audiooptions}[0], 
+			   $opt->{SRC_FPS}, 
+			   $opt->{rawcommand}, 
+			   $outputfile;
+
+    print $LOG "$command \n";
+    system ($command);
+}
+
+sub mux_streams ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my $workdir = shift;
+    my $progs = shift;
+    my $muxing_succeeded = 0;
+
+    unless ( $opt->{containerformat} eq "avi" ) {
+
+	# force 16:9 display if source is anamorphic
+	$opt->{avi2mkv_widescreen} = "";
+	if ( $opt->{widescreen} eq "yes" ) {
+	    $opt->{avi2mkv_widescreen} = " -w ";
+	}
+
+	# process external audio streams
+	print STDERR "singleaudio is " . $opt->{singleaudio} . "\n" if $opt->{debug};
+	if ( $opt->{singleaudio} eq "no" ) {
+	    my $counter = 1;
+	    foreach my $audiofile (@{$opt->{externalaudio}}) {
+		if (-f "$audiofile") {
+		    $audiofile =~ s/$opt->{TMP}\///;
+		    $audiofile =~ s/$opt->{TMP}\\//;
+		    $opt->{avi2mkv_secondaudioopts} = sprintf "%s --join_external_audio_file \"%s\"",
+		                                      $opt->{avi2mkv_secondaudioopts}, 
+						      $audiofile;
+		}
+		$counter++;
+	    }
+	}
+
+	my $filebase = &catfile( $opt->{TMP}, $opt->{moviebase});
+	unless ( -f "$filebase" . ".avi" ) {
+	    move ($filebase . "_tmp.avi", $filebase . ".avi");
+	    $opt->{avi2mkv_sourcefile} = $opt->{moviebase} . ".avi";
+	} else {
+	    $opt->{avi2mkv_sourcefile} = $opt->{moviebase} . "_tmp.avi"
+	}
+	print STDERR "avi2mkv_sourcefile is " . $opt->{avi2mkv_sourcefile} . "\n" if $opt->{debug};
+	print STDERR "avi2mkv_title is " . $opt->{avi2mkv_title} . "\n" if $opt->{debug};
+
+	# passing parameters to avi2mkv 
+	print STDERR "containerformat is " . $opt->{containerformat} . "\n" if $opt->{debug};
+	given ($opt->{containerformat}) { 
+	    when ("mp4") {$opt->{format}="--mp4mux";}
+	    when ("ts")  {$opt->{format}="--tsmux";}
+	    when ("ogm") {$opt->{format}="--ogmmux";}
+	    default {        $opt->{format}=" ";}
+	}
+	print STDERR "audiotarget is " . $opt->{audiotarget} . "\n" if $opt->{debug};
+	given ($opt->{audiotarget}) { 
+	    when("mp3")  {$opt->{audioconvert}="-mp3_audio";}
+	    when("aac")  {$opt->{audioconvert}="-aac_audio";}
+	    when("ogg")  {$opt->{audioconvert}="-ogg_audio";}
+	    when("flac") {$opt->{audioconvert}="-flac_audio";}
+	    when("ac3")  {$opt->{audioconvert}="-ac3_audio";}
+	    default {        $opt->{audioconvert}=" ";}
+	}
+	# subtitle list from external source
+	if ($opt->{sublistfile}) {
+	    open my $SUBOPT, "<" ,$opt->{sublistfile} 
+		 or die "Unable to open $opt->{sublistfile}:$!\n";
+	    my @data = <$SUBOPT>;
+	    ($opt->{externalsubopts}) = grep (s/avi2mkv_subtitle_list (.+)/$1/, @data );
+	    chomp $opt->{externalsubopts};
+	    $opt->{externalsubopts} = " --subtitlelist " . $opt->{externalsubopts};
+	}
+	
+	my $passed_parameters= sprintf "%s %s %s %s %s %s %s %s",
+					$opt->{format},
+					$opt->{externalsubopts},
+					$opt->{avi2mkv_pass_languages},
+					$opt->{audioconvert}, 
+					$opt->{abitrate}, 
+					$opt->{normalizeaudio},
+					$opt->{setaudiovolume}, 
+					$opt->{converttostereo};
+
+	print STDERR "passed_parameters is " . $passed_parameters . "\n" if $opt->{debug};
+	print $LOG "Calling avi2mkv to create Matroska files\n";
+
+	my $command = sprintf "%s -p %s %s -t \"%s\" %s %s %s %s \"%s\"",
+			       $progs->{avi2mkv},
+			       $opt->{profile},
+			       $passed_parameters,
+			       $opt->{moviebase},
+			       $opt->{avi2mkv_widescreen},
+			       $opt->{avi2mkv_chapters},
+			       $opt->{subtitles},
+			       $opt->{avi2mkv_secondaudioopts},
+			       $opt->{avi2mkv_sourcefile};
+	print STDERR "command is " . $command . "\n" if $opt->{debug};
+	print $LOG $command . "\n";
+	chdir $opt->{TMP};
+	system ($command);
+	if ( -1 == $? ) {
+	    chdir $workdir; 
+	    print $LOG "Call to external program avi2mkv failed. Reason: $! \n";
+	}
+	else {
+	    $muxing_succeeded = 1;
+	}
+
+	if ( -f $opt->{moviebase} . ".mkv") {
+	    unless (-f &catfile($opt->{OUTDIR}, $opt->{moviebase} . ".mkv")) {
+		move ($opt->{moviebase} . ".mkv", $opt->{OUTDIR});
+	    } else {
+		print STDERR "File already exists in output directory.\n" if $opt->{debug};   
+		print STDERR "Renaming to " . $opt->{moviebase} . ".mkv.mkv" . " before moving.\n" if $opt->{debug};  
+		print $LOG "Renaming to " . $opt->{moviebase} . ".mkv.mkv" . " before moving.\n" if $opt->{debug};  
+		rename ("$opt->{moviebase}" . ".mkv", $opt->{moviebase} . ".mkv.mkv");
+		print $LOG "rename failed \n" unless (-f $opt->{moviebase} . ".mkv.mkv");
+		move ($opt->{moviebase} . ".mkv.mkv", $opt->{OUTDIR});
+	    }
+	    chdir $workdir; 
+	}
+    } else { 
+	unless ( -f &catfile($opt->{OUTDIR}, $opt->{moviebase} . ".avi")) {
+	    move (&catfile($opt->{TMP}, $opt->{moviebase} . "_tmp.avi"), &catfile($opt->{OUTDIR}, $opt->{moviebase} . ".avi"));
+	    $muxing_succeeded = 1;
+	}
+    }
+    if ($muxing_succeeded) {
+	unless ($opt->{debug}) {
+	    print $LOG "muxing succeeded. cleaning up temporary files.\n";
+	    &clean_tmpdir($LOG, $opt->{TMP});
+	}
+    }
+
+}
+
+# read config file if present 
+my $configfile = &check_config ();
+#print STDERR "config file is $configfile\n";
+if ($configfile) {
+    &read_config ($configfile, \@{$opt->{languages}}, $progs);
+# getting values specific to bluray-info
+open my $CONF, '<', $configfile or die "could not open config file $configfile for reading\n";
+my @config = <$CONF>;
+close $CONF;
+$opt->{profile}          = &grep_config_value ("profile", \@config, $configfile); 
+   $opt->{containerformat}  = &grep_config_value ("containerformat", \@config, $configfile);
+   $opt->{debug}            = &grep_config_value ("debug", \@config, $configfile); 
+   $opt->{noise_reduction}  = &grep_config_value ("menc_noise_reduction", \@config, $configfile); 
+   $opt->{cropborders}      = &grep_config_value ("menc_cropborders", \@config, $configfile); 
+   $opt->{expandvideo}      = &grep_config_value ("menc_expandvideo", \@config, $configfile); 
+   $opt->{TMPPATH}          = &grep_config_value ("menc_TMPPATH", \@config, $configfile); 
+   $opt->{OUTPUTPATH}       = &grep_config_value ("menc_OUTPUTPATH", \@config, $configfile); 
+   $opt->{twopass}          = &grep_config_value ("menc_twopass", \@config, $configfile); 
+   $opt->{BITRATE}          = &grep_config_value ("menc_BITRATE", \@config, $configfile); 
+   $opt->{audiotarget}      = &grep_config_value ("menc_audiotarget", \@config, $configfile); 
+   $opt->{singleaudio}      = &grep_config_value ("menc_singleaudio", \@config, $configfile); 
+   $opt->{interlaced}       = &grep_config_value ("menc_interlaced", \@config, $configfile); 
+   $opt->{widescreen}       = &grep_config_value ("menc_widescreen", \@config, $configfile); 
+   $opt->{reverse}          = &grep_config_value ("menc_reverse", \@config, $configfile); 
+   $opt->{targetwidth}      = &grep_config_value ("menc_targetwidth", \@config, $configfile); 
+   $opt->{targetheight}     = &grep_config_value ("menc_targetheight", \@config, $configfile); 
+   $opt->{override_video_encoder} = &grep_config_value ("menc_override_video_encoder", \@config, $configfile); 
+   $opt->{rawcommand}       = &grep_config_value ("menc_rawcommand", \@config, $configfile); 
+   $opt->{process_subtitles} = &grep_config_value ("menc_process_subtitles", \@config, $configfile); 
+   $opt->{convert_sup}       = &grep_config_value ("menc_convert_sup", \@config, $configfile); 
+}
+$opt->{debug}            = ""  unless ($opt->{debug} eq "yes");
+$opt->{profile}          = "nq"  unless ($opt->{profile});
+$opt->{containerformat}  = "mkv" unless ($opt->{containerformat});
+$opt->{noise_reduction}  = "no"  unless ($opt->{noise_reduction});
+$opt->{cropborders}      = "no"  unless ($opt->{cropborders});
+$opt->{expandvideo}      = "no"  unless ($opt->{expandvideo});
+$opt->{twopass}          = "no"  unless ($opt->{twopass});
+$opt->{BITRATE}          = 0     unless ($opt->{BITRATE});
+$opt->{TMPPATH}          = ""    unless ($opt->{TMPPATH});
+$opt->{OUTPUTPATH}       = ""    unless ($opt->{OUTPUTPATH});
+$opt->{audiotarget}      = "copy" unless ($opt->{audiotarget});
+$opt->{singleaudio}      = "no"  unless ($opt->{singleaudio});
+$opt->{interlaced}       = "no"  unless ($opt->{interlaced});
+$opt->{widescreen}       = "no"  unless ($opt->{widescreen});
+$opt->{reverse}          = "no"  unless ($opt->{reverse});
+$opt->{targetwidth}      = "no"  unless ($opt->{targetwidth});
+$opt->{targetheight}     = "no"  unless ($opt->{targetheight});
+$opt->{rawcommand}       = ""    unless ($opt->{rawcommand});
+$opt->{override_video_encoder}     = ""  unless ($opt->{override_video_encoder});
+$opt->{process_subtitles}= "no"    unless ($opt->{process_subtitles});
+$opt->{convert_sup}      = "no"    unless ($opt->{convert_sup});
+
+my $workdir = cwd(); 
+
+# parse command line arguments if present
+&init ($opt);
+
+foreach my $inputfile (@ARGV) {
+    my $pathchanged = 0;
+    my $oldpath = cwd();
+    my ($file, $path, $suffix) = fileparse($inputfile,qr{\.\w+});
+    $path =~ s/^.\///;
+    print "filename is $file suffix is $suffix and path is $path .\n" if $opt->{debug};
+    if ($path) {
+        chdir "$path"; 
+	$inputfile = $file . $suffix; 
+	$workdir = cwd(); 
+	$pathchanged = 1;
+    }
+    
+    $LOG = &check_input_file ($opt, $inputfile, $workdir);
+
+    &prepare_filters ($LOG, $opt, $progs);
+
+    &choose_profile ($LOG, $opt, $progs);
+
+    # Subtitle support
+    if ($opt->{process_subtitles} eq "yes") {
+	&extract_subtitles ($LOG, $opt, $progs, $opt->{input}, $opt->{TMP});
+    }
+
+    &build_filter_chain ($LOG, $opt, $progs);
+
+    &prepare_audio ($LOG, $opt, $progs);
+
+    # encoding
+    &encode_video ($LOG, $opt, $progs);
+
+    #muxing   
+    &mux_streams ($LOG, $opt, $workdir, $progs);
+    
+    if ($pathchanged) {
+        chdir "$oldpath"; 
+	$pathchanged = 0;
+    }
+}
+
+exit 0;
+

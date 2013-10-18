@@ -1,0 +1,36 @@
+#!/usr/bin/perl
+use File::Basename;
+chdir "/var/local/mirror/debian/pool" or die "$!";
+my @files = `find -name *.deb`;
+chomp @files;
+my %hash;
+for (@files) {
+    my $key = basename($_);
+    $key =~ s/_.*$//;
+    if (! defined $hash{$key}) {
+	my @a;
+	$hash{$key} = \@a;
+    }
+    push @{$hash{$key}}, $_;
+}
+
+for (keys %hash) {
+    next if $#{$hash{$_}} < 1;
+    my $latest_i = 0;
+    my $latest_mtime = 0;
+    for (my $i=0; $i <= $#{$hash{$_}}; $i++) {
+	my $mtime = (stat($hash{$_}->[$i]))[9];
+	if ($mtime > $latest_mtime) {
+	    $latest_mtime = $mtime;
+	    $latest_i = $i;
+	}
+    }
+    print "Amongst \n";
+    print join("\n", @{$hash{$_}}), "\n";
+    print "I found ", $hash{$_}->[$latest_i], " as latest package.\n";
+    for (my $i=0; $i <= $#{$hash{$_}}; $i++) {
+	next if $i == $latest_i;
+	unlink $hash{$_}->[$i];
+	print "I deleted ", $hash{$_}->[$i], ".\n";
+    }
+}

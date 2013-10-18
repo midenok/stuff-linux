@@ -1,0 +1,13 @@
+#!/bin/sh
+rsync -aHP \
+    --exclude '/dev/*' \
+    --exclude '/proc/*' \
+    --exclude '/sys/*' \
+    --exclude '/tmp/*' \
+    --exclude '/var/tmp/*' \
+    --exclude '/lib/init/rw/*' \
+    --exclude '/var/lib/nfs/rpc_pipefs/*' \
+    --exclude '/media/*' \
+    --exclude '/mnt/*' / "$@"
+
+

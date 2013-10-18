@@ -1,0 +1,63 @@
+#!/usr/bin/perl
+
+use strict;
+use Cwd 'realpath';
+use Encode;
+
+my %C = (
+	storage_path => 'discs',
+	info_file => 'info',
+	disk_dir => 'disk',
+	disk_file => 'disk.iso',
+	links_dir => 'links',
+	links_prefix => '../discs'
+);
+
+die "links dir does not exist: $C{links_dir}\n"
+	unless -d $C{links_dir};
+
+opendir DIR, $C{storage_path} || die "$C{discs_path}: $!\n";
+my @subdirs =
+	grep { -d "$C{storage_path}/${_}" }
+	readdir DIR;
+closedir DIR;
+
+for my $subdir (@subdirs) {
+	my $subdir_path = "$C{storage_path}/${subdir}";
+	my $info_file = "${subdir_path}/$C{info_file}";
+	my $disk_dir = "${subdir_path}/$C{disk_dir}";
+	my $disk_file = "${subdir_path}/$C{disk_file}";
+	next unless
+		-f $info_file && (-d $disk_dir || -f $disk_file);
+	my $movie_name = get_movie_name($info_file);
+	$movie_name = "NO_TITLE_${subdir}"
+		unless defined $movie_name;
+	#Encode::from_to($movie_name, "koi8-r", "cp1251");
+	my $link_dir = "$C{links_dir}/${movie_name}";
+	unlink $link_dir
+		if -l $link_dir;
+	my $link_target = defined $C{links_prefix} ?
+		"$C{links_prefix}/${subdir}" :
+		realpath($subdir_path);
+	$link_target .= "/$C{disk_dir}"
+	    unless -f $disk_file;
+	symlink $link_target, $link_dir
+		or die "${link_dir}: $!\n";
+}
+
+sub get_movie_name
+{
+	my $info_file = shift;
+	open FILE, $info_file
+		or die "${info_file}: $!\n";
+	my $movie_name;
+	while (<FILE>) {
+		m/^Title:\s+(.+\S)\s*$/ ||
+		m/^TitleEng:\s+(.+\S)\s*$/
+			or next;
+		$movie_name = $1;
+		last;
+	}
+	close FILE;
+	return $movie_name;
+}

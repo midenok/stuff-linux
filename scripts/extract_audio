@@ -1,0 +1,189 @@
+#!/bin/bash
+usage()
+{
+    cat <<EOF
+Usage: $(basename $0) [OPTIONS] [<in-file>] [<lang>] [-s <start-pos>] [-e <end-pos>]
+Options:
+    -a, --auto-num                  Rename output file if already exists
+    -e, --end, --end-pos <time>     End position (see man mplayer for -endpos)
+    -i, --in  <in-file>             Input filename (should be any playable video file)
+    -l, --lang <track-id-or-lang>   Audio track number (from 0) or lang code (like rus, eng, jpn)
+    -n, --dry-run, --just-print     Brawl everything and don't run mplayer and lame
+    -m, --mix <channel-panning>     Mixing channels matrix (see man mplayer for -af pan)
+    -w, --wav, --no-enc             Output in WAV format instead of MP3
+    -o, --out <out-file>            Name of output audio file (will be generated automatically, if not specified)
+    -s, --start, --start-pos <time> Start position (see man mplayer for -ss)
+    -v, --verbose                   Show commands how they executed
+EOF
+}
+
+[[ $_ != $0 ]] && {
+    echo "Sourcing is prohibited! Use subshell instead." >&2
+    return 1
+}
+
+
+die()
+{
+    echo "$@" >&2
+    exit 1
+}
+
+optstring_long="auto-num,dry-run,just-print,end:,end-pos:,in:,lang:,mix:,no-enc,wav,out:,start:,start-pos:,verbose,help"
+optstring_short="ae:i:l:m:no:s:vwh"
+
+TEMP=$(getopt -o "${optstring_short}" --long "${optstring_long}" --name 'mp_get_audio.sh' -- "$@")
+if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+eval set -- "$TEMP"
+
+unset verbose_on
+unset verbose_off
+downmix="-af pan=2:0.2:0:0:0.2:0.1:0:0:0.1:1:1:0:0"
+unset lang
+unset track
+unset in_file
+unset out_file
+unset dry_run
+unset start
+unset end
+encode=true
+auto_num=false
+
+require()
+{
+    local exe
+    exe=$(which "$1") && [ -x "$exe" ] || {
+        echo "$1 is not installed!" >&2
+        dry_run=echo
+    }
+    shift
+    $verbose_on
+    $dry_run $exe "$@"
+    $verbose_off
+}
+
+set_lang()
+{
+    case ${1:0:1} in
+        [0-9]) lang="-aid ${1}";;
+        *) lang="-alang ${1}";;
+    esac
+}
+
+while true
+do
+    case "$1" in
+        -a|--auto-num)
+            auto_num=true
+            shift;;
+        -e|--end|--end-pos)
+            end="-endpos $2"
+            shift 2;;
+        -i|--in)
+            in_file=$2
+            shift 2;;
+        -l|--lang)mk
+            track=$2
+            set_lang "$2"
+            shift 2;;
+        -m|--mix)
+            downmix="-af pan=${2}"
+            shift 2;;
+        -n|--dry-run|--just-print)
+            dry_run=echo
+            shift;;
+        -o|--out)
+            out_file=$2
+            shift 2;;
+        -s|--start|--start-pos)
+            start="-ss $2"
+            shift 2;;
+        -w|--wav|--no-enc)
+            encode=false
+            shift;;
+        -v|--verbose)
+            verbose_on="set -x"
+            verbose_off="set +x"
+            shift;;
+        -h|--help)
+            usage
+            exit 0
+            shift;;
+        --) shift; break;;
+    esac
+done
+
+[ -z "$in_file" ] && {
+    in_file=$1
+    shift
+}
+
+[ -n "$in_file" ] ||
+    die 'Input file was not specified!'
+
+[ -f "$in_file" ] ||
+    die "${in_file} file does not exist!"
+
+[ -z "$track" ] && {
+    track=$1
+    set_lang "$1"
+    shift
+}
+
+if $encode
+then
+    ext=mp3
+else
+    ext=wav
+fi
+
+unset out_pref
+
+if [ -z "$out_file" ]
+then
+    out_pref=${in_file%.[aA][vV][iI]}
+    out_pref=${out_pref%.[mM][kK][vV]}
+    out_pref=${out_pref%.[mM][pP]4}
+    [ -n "$track" ] && out_pref="${out_pref}.${track}"
+    out_file="${out_pref}.${ext}"
+    auto_num=true
+else
+    if $encode
+    then
+        out_pref=${out_file%.[mM][pP]3}
+    else
+        out_pref=${out_file%.[wW][aA][fF]}
+    fi
+    [ "$out_file" = "$out_pref" ] && {
+        out_file="${out_pref}.${ext}"
+        auto_num=true
+    }
+fi
+
+if $auto_num
+then
+    n=0
+    while [ -f "$out_file" ]
+    do
+        out_file="${out_pref}.${n}.${ext}"
+        n=$((n + 1))
+    done
+fi
+
+mplayer_out=$out_file
+
+if $encode
+then
+    mplayer_out=$(mktemp /tmp/mp_get_audio.XXXXXXXXXX.wav)
+fi
+
+mplayer_ok=true
+require mplayer $lang $downmix -ao "pcm:fast:file=${mplayer_out}" -vo null $start $end "$in_file" ||
+    mplayer_ok=false
+
+if $encode
+then
+    $mplayer_ok &&
+        require lame -V0 -q0 --vbr-new "$mplayer_out" "$out_file"
+    rm "$mplayer_out"
+fi

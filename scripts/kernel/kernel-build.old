@@ -1,0 +1,57 @@
+#!/bin/sh
+
+# Patch revision upgrade procedure:
+# * replace all 2.6.25.x to 2.6.25.y in debian/control
+# * replace 2.6.25.x to 2.6.25.y in last entry in debian/changelog
+
+# bug: make-kpkg takes .config, not KCONFIG_CONFIG value
+# second make-kpkg without config changes makes new revision
+
+CONF_VARS=conf.vars
+
+conf_vars_extract()
+{
+    test -f $CONF_VARS && grep ^$1[[:space:]]*= $CONF_VARS|sed -e 's/^[^=]*=\s*//'
+}
+
+VERSION=${VERSION:-$(conf_vars_extract VERSION)}
+PATCHLEVEL=${PATCHLEVEL:-$(conf_vars_extract PATCHLEVEL)}
+SUBLEVEL=${SUBLEVEL:-$(conf_vars_extract SUBLEVEL)}
+EXTRAVERSION=${EXTRAVERSION:-$(conf_vars_extract EXTRAVERSION)}
+APPEND_TO_VERSION=${APPEND_TO_VERSION:-$(conf_vars_extract APPEND_TO_VERSION)}
+
+export KCONFIG_CONFIG=.config
+
+
+if [ "$1" != "-s" ]
+then
+    if [ -f debian/changelog ]
+    then
+        #prev_config=/boot/config-${VERSION}.${PATCHLEVEL}.${SUBLEVEL}${EXTRAVERSION:+.$EXTRAVERSION}${APPEND_TO_VERSION:+$APPEND_TO_VERSION}
+        prev_config=$KCONFIG_CONFIG.old
+
+        if [ -f $prev_config ]
+        then
+            debchange --increment --no-auto-nmu -- "$(diff -e -I '^#' $prev_config $KCONFIG_CONFIG)"
+        else
+            #OLDCHANGELOG=$(mktemp changelog.XXXXXXXXXX)
+            #mv debian/changelog $OLDCHANGELOG
+            [ -f debian/official ] || touch debian/official
+            debchange --increment -- "new version"
+        fi
+    else
+        test -z "$INITIAL_REVISION" && INITIAL_REVISION=01
+    fi
+else
+    shift
+fi
+
+export CONCURRENCY_LEVEL=$(grep ^processor /proc/cpuinfo|wc -l)
+
+rm -rf debian/stamp
+
+LANG=POSIX LC_MESSAGES="" make-kpkg kernel_image --rootcmd fakeroot \
+    ${INITIAL_REVISION:+--revision $INITIAL_REVISION} \
+    ${APPEND_TO_VERSION:+--append-to-version $APPEND_TO_VERSION} "$@"
+#LANG=POSIX LC_MESSAGES="" CONCURRENCY_LEVEL=2 make-kpkg modules_image --revision babe.04 --append-to-version -noalsa "$@"
+#LANG=POSIX LC_MESSAGES="" CONCURRENCY_LEVEL=2 make-kpkg modules_image --revision babe.04 "$@"

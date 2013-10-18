@@ -1,0 +1,2371 @@
+#!/usr/bin/perl
+# toolbox_fangorn
+#
+# just a collection of subroutines used by other programs 
+# 
+# Author: fangorn (at forums.gentoo.org)
+#
+# Licence: GPL v2 (or later), use at your own risk, no warranties.
+# 
+# Updates and requests:
+#           http://forums.gentoo.org/viewtopic-t-744041-start-8.html 
+#           or at the project page at http://fangornsrealm.eu
+# Changelog: 
+# 0.1.0
+# - added config file handling
+# - added audio file format detection
+# - added video geometry/fps detection
+# 0.1.1
+# - added some functions for language search
+# 0.2.0
+# - fixed a bug in automatic cropping
+# - added menc options to the configuration file handling routine
+# - added routine to extract chapter information from all sources supported by mplayer
+# 0.2.1
+# - fixed a bug in language detection
+# 0.3.0
+# - moved list of known translations over to the toolbox. If you have other language code translations, add them here.
+# - added further configuration file options for bluray-info
+# - added further riptoh264 config file options
+# - added further blu2mkv config file options
+# - added subtitle extraction from Matroska sources
+# - added subtitle extraction from MPEG Transport Stream sources
+# - fixed a bug in chapter export
+# - added function to clean temporary directories
+# - moved handling of temporary directories to toolbox
+# - audio stream detection by language works now with MPEG Transport Stream input too
+# 0.3.1
+# - made crop detection more robust
+# 0.3.2
+# - fixed the "switch is depreceated" message
+# 0.3.3
+# - removed dependency for avimerge from the transcode package
+# 0.3.4
+# - minor changes to support file names containing whitespace and other non-filename characters
+# - new order of parameters in choose_video_parameters, you need to use following versions of the other tools
+#                   menc                     3.1.0 or newer
+#                   riptoh264                2.1.0 or newer
+#                   blu2mkv                  1.1.0 or newer
+#                   avi2mkv                  2.2.0 or newer
+#                   toolbox_fangorn          0.3.4 or newer
+#                   choose_video_parameters  0.2.6 or newer
+# 0.4.0
+# - working under Windows systems now
+# - rewritten the configuration file handling and added the functionality to add missing options 
+#   with their default value
+# 
+
+use warnings; 
+use strict;
+#use feature 'switch';
+use POSIX qw(locale_h);
+use File::Spec::Functions;
+use File::Path;
+my $old_locale = setlocale(LC_CTYPE);
+setlocale(LC_CTYPE, "C");
+
+my $Versionnumber = "0.4.0";
+my $os = $^O;
+
+if ($os =~ m/MSWin/) {
+    use Env qw(@PATH @PATHEXT HOME TERM);
+} else {
+    use Env qw(@PATH HOME TERM);
+}
+
+# language code translations 
+# as some disks use non ISO standard 3-digit codes that tsMuxer does not recognize.
+# if you find additional necessary translations, add them and maybe share with the community
+# at http://forums.gentoo.org/viewtopic-t-744041-start-0-postdays-0-postorder-asc-highlight-.html 
+$std::known_translations = {
+    "" => "ukn",
+    "ces" => "chz",
+    "deu" => "ger",
+    "fra" => "fre",
+    "nld" => "dut",
+    "ell" => "gre",
+    "slk" => "slo",
+    "sqi" => "alb",
+    "bod" => "bod",
+    "cym" => "wel",
+    "ron" => "rum",
+    "fas" => "per",
+    "mya" => "bur",
+    "msa" => "may",
+    "mri" => "mao",
+    "mkd" => "mac",
+    "zho" => "chi",
+    "isl" => "ice",
+};
+
+# list of valid ISO language codes
+$std::iso639_language_code_map = {
+    "aar" => "Afar",
+    "abk" => "Abkhazian",
+    "ace" => "Achinese",
+    "ach" => "Acoli",
+    "ada" => "Adangme",
+    "ady" => "Adyghe,Adygei",
+    "afa" => "Afro-Asiatic (Other)",
+    "afh" => "Afrihili",
+    "afr" => "Afrikaans",
+    "ain" => "Ainu",
+    "aka" => "Akan",
+    "akk" => "Akkadian",
+    "alb" => "Albanian",
+    "ale" => "Aleut",
+    "alg" => "Algonquian languages",
+    "alt" => "Southern_Altai",
+    "amh" => "Amharic",
+    "ang" => "English,Old (ca.450-1100)",
+    "anp" => "Angika",
+    "apa" => "Apache_languages",
+    "ara" => "Arabic",
+    "arc" => "Aramaic",
+    "arg" => "Aragonese",
+    "arm" => "Armenian",
+    "arn" => "Araucanian",
+    "arp" => "Arapaho",
+    "art" => "Artificial (Other)",
+    "arw" => "Arawak",
+    "asm" => "Assamese",
+    "ast" => "Asturian,Bable",
+    "ast" => "Bable,Asturian",
+    "ath" => "Athapascan languages",
+    "aus" => "Australian languages",
+    "ava" => "Avaric",
+    "ave" => "Avestan",
+    "awa" => "Awadhi",
+    "aym" => "Aymara",
+    "aze" => "Azerbaijani",
+    "bad" => "Banda",
+    "bai" => "Bamileke languages",
+    "bak" => "Bashkir",
+    "bal" => "Baluchi",
+    "bam" => "Bambara",
+    "ban" => "Balinese",
+    "baq" => "Basque",
+    "bas" => "Basa",
+    "bat" => "Baltic (Other)",
+    "bej" => "Beja",
+    "bel" => "Belarusian",
+    "bem" => "Bemba",
+    "ben" => "Bengali",
+    "ber" => "Berber (Other)",
+    "bho" => "Bhojpuri",
+    "bih" => "Bihari",
+    "bik" => "Bikol",
+    "bin" => "Bini",
+    "bis" => "Bislama",
+    "bla" => "Siksika",
+    "bnt" => "Bantu (Other)",
+    "bos" => "Bosnian",
+    "bra" => "Braj",
+    "bre" => "Breton",
+    "btk" => "Batak (Indonesia)",
+    "bua" => "Buriat",
+    "bug" => "Buginese",
+    "bul" => "Bulgarian",
+    "bur" => "Burmese",
+    "byn" => "Blin,Bilin",
+    "cad" => "Caddo",
+    "cai" => "Central American Indian (Other)",
+    "car" => "Carib",
+    "cat" => "Catalan",
+    "cau" => "Caucasian (Other)",
+    "ceb" => "Cebuano",
+    "cel" => "Celtic (Other)",
+    "cha" => "Chamorro",
+    "chb" => "Chibcha",
+    "che" => "Chechen",
+    "chg" => "Chagatai",
+    "chi" => "Chinese",
+    "chk" => "Chuukese",
+    "chm" => "Mari",
+    "chn" => "Chinook jargon",
+    "cho" => "Choctaw",
+    "chp" => "Chipewyan",
+    "chr" => "Cherokee",
+    "chu" => "Old Slavonic,Church Slavonic,Old Bulgarian",
+    "chv" => "Chuvash",
+    "chy" => "Cheyenne",
+    "cmc" => "Chamic_languages",
+    "cop" => "Coptic",
+    "cor" => "Cornish",
+    "cos" => "Corsican",
+    "cpe" => "Creoles and pidgins",
+    "cpf" => "Creoles and pidgins",
+    "cpp" => "Creoles and pidgins",
+    "cre" => "Cree",
+    "crh" => "Crimean Tatar,Crimean Turkish",
+    "crp" => "Creoles and pidgins (Other)",
+    "csb" => "Kashubian",
+    "cus" => "Cushitic (Other)",
+    "cze" => "Czech",
+    "dak" => "Dakota",
+    "dan" => "Danish",
+    "dar" => "Dargwa",
+    "day" => "Dayak",
+    "del" => "Delaware",
+    "den" => "Slave (Athapascan)",
+    "dgr" => "Dogrib",
+    "din" => "Dinka",
+    "div" => "Divehi",
+    "doi" => "Dogri",
+    "dra" => "Dravidian (Other)",
+    "dsb" => "Lower_Sorbian",
+    "dua" => "Duala",
+    "dum" => "Dutch,_Middle (ca. 1050-1350)",
+    "dut" => "Dutch,Flemish",
+    "dyu" => "Dyula",
+    "dzo" => "Dzongkha",
+    "efi" => "Efik",
+    "egy" => "Egyptian (Ancient)",
+    "eka" => "Ekajuk",
+    "elx" => "Elamite",
+    "eng" => "English",
+    "enm" => "English,Middle (1100-1500)",
+    "epo" => "Esperanto",
+    "est" => "Estonian",
+    "ewe" => "Ewe",
+    "ewo" => "Ewondo",
+    "fan" => "Fang",
+    "fao" => "Faroese",
+    "fat" => "Fanti",
+    "fij" => "Fijian",
+    "fil" => "Filipino,Pilipino",
+    "fin" => "Finnish",
+    "fiu" => "Finno-Ugrian (Other)",
+    "fon" => "Fon",
+    "fre" => "French",
+    "frm" => "French, Middle (ca.1400-1600)",
+    "fro" => "French, Old (842-ca.1400)",
+    "frr" => "Northern Frisian",
+    "frs" => "Eastern Frisian",
+    "fry" => "Frisian",
+    "ful" => "Fulah",
+    "fur" => "Friulian",
+    "gaa" => "Ga",
+    "gay" => "Gayo",
+    "gba" => "Gbaya",
+    "gem" => "Germanic (Other)",
+    "geo" => "Georgian",
+    "ger" => "German",
+    "gez" => "Geez",
+    "gil" => "Gilbertese",
+    "gla" => "Gaelic,Scottish Gaelic",
+    "gle" => "Irish",
+    "glg" => "Gallegan",
+    "glv" => "Manx",
+    "gmh" => "German, Middle_High (ca.1050-1500)",
+    "goh" => "German, Old_High (ca.750-1050)",
+    "gon" => "Gondi",
+    "gor" => "Gorontalo",
+    "got" => "Gothic",
+    "grb" => "Grebo",
+    "grc" => "Greek,Ancient (to 1453)",
+    "gre" => "Greek",
+    "grn" => "Guarani",
+    "gsw" => "Swiss German,Alemannic,Alsatian",
+    "guj" => "Gujarati",
+    "gwi" => "Gwichdin",
+    "hai" => "Haida",
+    "hat" => "Haitian,Haitian Creole",
+    "hau" => "Hausa",
+    "haw" => "Hawaiian",
+    "heb" => "Hebrew",
+    "heb" => "Hebrew",
+    "her" => "Herero",
+    "hil" => "Hiligaynon",
+    "him" => "Himachali",
+    "hin" => "Hindi",
+    "hit" => "Hittite",
+    "hmn" => "Hmong",
+    "hmo" => "Hiri_Motu",
+    "hrv" => "Croatian,Hrvatske",
+    "hsb" => "Upper Sorbian",
+    "hun" => "Hungarian",
+    "hup" => "Hupa",
+    "iba" => "Iban",
+    "ibo" => "Igbo",
+    "ice" => "Icelandic",
+    "ido" => "Ido",
+    "iii" => "Sichuan_Yi",
+    "ijo" => "Ijo",
+    "iku" => "Inuktitut",
+    "ile" => "Interlingue",
+    "ilo" => "Iloko",
+    "ina" => "Interlingua International",
+    "inc" => "Indic (Other)",
+    "ind" => "Indonesian",
+    "ine" => "Indo-European (Other)",
+    "inh" => "Ingush",
+    "ipk" => "Inupiaq",
+    "ira" => "Iranian (Other)",
+    "iro" => "Iroquoian languages",
+    "ita" => "Italian",
+    "jav" => "Javanese",
+    "jbo" => "Lojban",
+    "jpn" => "Japanese",
+    "jpr" => "Judeo-Persian",
+    "jrb" => "Judeo-Arabic",
+    "kaa" => "Kara-Kalpak",
+    "kab" => "Kabyle",
+    "kac" => "Kachin",
+    "kal" => "Greenlandic,Kalaallisut",
+    "kal" => "Kalaallisut,Greenlandic",
+    "kam" => "Kamba",
+    "kan" => "Kannada",
+    "kar" => "Karen",
+    "kas" => "Kashmiri",
+    "kau" => "Kanuri",
+    "kaw" => "Kawi",
+    "kaz" => "Kazakh",
+    "kbd" => "Kabardian",
+    "kha" => "Khasi",
+    "khi" => "Khoisan (Other)",
+    "khm" => "Khmer",
+    "kho" => "Khotanese",
+    "kik" => "Gikuyu,Kikuyu",
+    "kik" => "Kikuyu,Gikuyu",
+    "kin" => "Kinyarwanda",
+    "kir" => "Kirghiz",
+    "kmb" => "Kimbundu",
+    "kok" => "Konkani",
+    "kom" => "Komi",
+    "kon" => "Kongo",
+    "kor" => "Korean",
+    "kos" => "Kosraean",
+    "kpe" => "Kpelle",
+    "krc" => "Karachay-Balkar",
+    "krl" => "Karelian",
+    "kro" => "Kru",
+    "kru" => "Kurukh",
+    "kua" => "Kuanyama,Kwanyama",
+    "kua" => "Kwanyama,_Kuanyama",
+    "kum" => "Kumyk",
+    "kur" => "Kurdish",
+    "kut" => "Kutenai",
+    "lad" => "Ladino",
+    "lah" => "Lahnda",
+    "lam" => "Lamba",
+    "lao" => "Lao",
+    "lat" => "Latin",
+    "lav" => "Latvian",
+    "lez" => "Lezghian",
+    "lim" => "Limburgish,Limburger,Limburgan",
+    "lin" => "Lingala",
+    "lit" => "Lithuanian",
+    "lol" => "Mongo",
+    "loz" => "Lozi",
+    "ltz" => "Letzeburgesch,Luxembourgish",
+    "ltz" => "Luxembourgish,Letzeburgesch",
+    "lua" => "Luba-Lulua",
+    "lub" => "Luba-Katanga",
+    "lug" => "Ganda",
+    "lui" => "Luiseno",
+    "lun" => "Lunda",
+    "luo" => "Luo (Kenya_and_Tanzania)",
+    "lus" => "Lushai",
+    "mac" => "Macedonian",
+    "mad" => "Madurese",
+    "mag" => "Magahi",
+    "mah" => "Marshallese",
+    "mai" => "Maithili",
+    "mak" => "Makasar",
+    "mal" => "Malayalam",
+    "man" => "Mandingo",
+    "mao" => "Maori",
+    "map" => "Austronesian (Other)",
+    "mar" => "Marathi",
+    "mas" => "Masai",
+    "may" => "Malay",
+    "mdf" => "Moksha",
+    "mdr" => "Mandar",
+    "men" => "Mende",
+    "mga" => "Irish,Middle (900-1200)",
+    "mic" => "Micmac",
+    "min" => "Minangkabau",
+    "mis" => "Miscellaneous languages",
+    "mkh" => "Mon-Khmer (Other)",
+    "mlg" => "Malagasy",
+    "mlt" => "Maltese",
+    "mnc" => "Manchu",
+    "mni" => "Manipuri",
+    "mno" => "Manobo languages",
+    "moh" => "Mohawk",
+    "mol" => "Moldavian",
+    "mon" => "Mongolian",
+    "mos" => "Mossi",
+    "mul" => "Multiple languages",
+    "mun" => "Munda languages",
+    "mus" => "Creek",
+    "mwl" => "Mirandese",
+    "mwr" => "Marwari",
+    "myn" => "Mayan languages",
+    "myv" => "Erzya",
+    "nah" => "Nahuatl",
+    "nai" => "North American Indian (Other)",
+    "nap" => "Neapolitan",
+    "nau" => "Nauru",
+    "nav" => "Navaho,Navajo",
+    "nav" => "Navajo,Navaho",
+    "nbl" => "Ndebele,South",
+    "nbl" => "South Ndebele",
+    "nde" => "Ndebele,North",
+    "nde" => "North Ndebele",
+    "ndo" => "Ndonga",
+    "nds" => "Saxon_Low,German Low,Low Saxon,Low German",
+    "nep" => "Nepali",
+    "new" => "Newari",
+    "nia" => "Nias",
+    "nic" => "Niger-Kordofanian (Other)",
+    "niu" => "Niuean",
+    "nno" => "Norwegian_Nynorsk,Nynorsk,Norwegian",
+    "nob" => "Bokmål,Norwegian,Norwegian Bokmål",
+    "nog" => "Nogai",
+    "non" => "Norse,Old",
+    "nor" => "Norwegian",
+    "nqo" => "N'Ko",
+    "nso" => "Sotho,Northern",
+    "nub" => "Nubian languages",
+    "nwc" => "Classical Newari,Classical Nepal Bhasa",
+    "nya" => "Chewa,Chichewa,Nyanja",
+    "nym" => "Nyamwezi",
+    "nyn" => "Nyankole",
+    "nyo" => "Nyoro",
+    "nzi" => "Nzima",
+    "oci" => "Provençal,Occitan (post_1500)",
+    "oji" => "Ojibwa",
+    "ori" => "Oriya",
+    "orm" => "Oromo",
+    "osa" => "Osage",
+    "oss" => "Ossetian,Ossetic",
+    "ota" => "Turkish, Ottoman (1500-1928)",
+    "oto" => "Otomian languages",
+    "paa" => "Papuan (Other)",
+    "pag" => "Pangasinan",
+    "pal" => "Pahlavi",
+    "pam" => "Pampanga",
+    "pan" => "Panjabi",
+    "pap" => "Papiamento",
+    "pau" => "Palauan",
+    "peo" => "Persian,Old (ca.600-400_B.C.)",
+    "per" => "Persian",
+    "phi" => "Philippine (Other)",
+    "phn" => "Phoenician",
+    "pli" => "Pali",
+    "pol" => "Polish",
+    "pon" => "Pohnpeian",
+    "por" => "Portuguese",
+    "pra" => "Prakrit_languages",
+    "pro" => "Provençal,Old (to 1500)",
+    "pus" => "Pushto",
+    "que" => "Quechua",
+    "raj" => "Rajasthani",
+    "rap" => "Rapanui",
+    "rar" => "Rarotongan",
+    "roa" => "Romance (Other)",
+    "roh" => "Raeto-Romance",
+    "rom" => "Romany",
+    "rum" => "Romanian",
+    "run" => "Rundi",
+    "rup" => "Aromanian,Arumanian,Macedo-Romanian",
+    "rus" => "Russian",
+    "sad" => "Sandawe",
+    "sag" => "Sango",
+    "sah" => "Yakut",
+    "sai" => "South_American_Indian (Other)",
+    "sal" => "Salishan languages",
+    "sam" => "Samaritan Aramaic",
+    "san" => "Sanskrit",
+    "sas" => "Sasak",
+    "sat" => "Santali",
+    "scn" => "Sicilian",
+    "sco" => "Scots",
+    "sel" => "Selkup",
+    "sem" => "Semitic (Other)",
+    "sga" => "Irish,_Old (to 900)",
+    "sgn" => "Sign_languages",
+    "shn" => "Shan",
+    "sid" => "Sidamo",
+    "sin" => "Sinhalese",
+    "sio" => "Siouan_languages",
+    "sit" => "Sino-Tibetan (Other)",
+    "sla" => "Slavic (Other)",
+    "slo" => "Slovak",
+    "slv" => "Slovenian",
+    "sma" => "Southern_Sami",
+    "sme" => "Northern_Sami",
+    "smi" => "Sami_languages (Other)",
+    "smj" => "Lule_Sami",
+    "smn" => "Inari_Sami",
+    "smo" => "Samoan",
+    "sms" => "Skolt_Sami",
+    "sna" => "Shona",
+    "snd" => "Sindhi",
+    "snk" => "Soninke",
+    "sog" => "Sogdian",
+    "som" => "Somali",
+    "son" => "Songhai",
+    "sot" => "Sotho,_Southern",
+    "spa" => "Castilian",
+    "spa" => "Spanish",
+    "srd" => "Sardinian",
+    "srn" => "Sranan_Tongo",
+    "srp" => "Serbian",
+    "srr" => "Serer",
+    "ssa" => "Nilo-Saharan (Other)",
+    "ssw" => "Swati",
+    "suk" => "Sukuma",
+    "sun" => "Sundanese",
+    "sus" => "Susu",
+    "sux" => "Sumerian",
+    "swa" => "Swahili",
+    "swe" => "Swedish",
+    "syc" => "Classical_Syriac",
+    "syr" => "Syriac",
+    "tah" => "Tahitian",
+    "tai" => "Tai (Other)",
+    "tam" => "Tamil",
+    "tat" => "Tatar",
+    "tel" => "Telugu",
+    "tem" => "Timne",
+    "ter" => "Tereno",
+    "tet" => "Tetum",
+    "tgk" => "Tajik",
+    "tgl" => "Tagalog",
+    "tha" => "Thai",
+    "tib" => "Tibetan",
+    "tig" => "Tigre",
+    "tir" => "Tigrinya",
+    "tiv" => "Tiv",
+    "tkl" => "Tokelau",
+    "tlh" => "Klingon,tlhlngan-Hol",
+    "tli" => "Tlingit",
+    "tmh" => "Tamashek",
+    "tog" => "Tonga (Nyasa)",
+    "ton" => "Tonga (Tonga_Islands)",
+    "tpi" => "Tok_Pisin",
+    "tsi" => "Tsimshian",
+    "tsn" => "Tswana",
+    "tso" => "Tsonga",
+    "tuk" => "Turkmen",
+    "tum" => "Tumbuka",
+    "tup" => "Tupi_languages",
+    "tur" => "Turkish",
+    "tut" => "Altaic (Other)",
+    "tvl" => "Tuvalu",
+    "twi" => "Twi",
+    "tyv" => "Tuvinian",
+    "udm" => "Udmurt",
+    "uga" => "Ugaritic",
+    "uig" => "Uighur",
+    "ukr" => "Ukrainian",
+    "umb" => "Umbundu",
+    "und" => "Undetermined",
+    "urd" => "Urdu",
+    "uzb" => "Uzbek",
+    "vai" => "Vai",
+    "ven" => "Venda",
+    "vie" => "Vietnamese",
+    "vol" => "Volapük",
+    "vot" => "Votic",
+    "wak" => "Wakashan languages",
+    "wal" => "Walamo",
+    "war" => "Waray",
+    "was" => "Washo",
+    "wel" => "Welsh",
+    "wen" => "Sorbian languages",
+    "wln" => "Walloon",
+    "wol" => "Wolof",
+    "xal" => "Kalmyk,Oirat",
+    "xho" => "Xhosa",
+    "yao" => "Yao",
+    "yap" => "Yapese",
+    "yid" => "Yiddish",
+    "yor" => "Yoruba",
+    "ypk" => "Yupik languages",
+    "zap" => "Zapotec",
+    "zbl" => "Blissymbols,Blissymbolics,Bliss",
+    "zen" => "Zenaga",
+    "zha" => "Chuang,Zhuang",
+    "znd" => "Zande",
+    "zul" => "Zulu",
+    "zun" => "Zuni",
+    "zza" => "Zaza,Dimili,Dimli,Kirdki,Kirmanjki,Zazaki",
+};
+
+# Language mappings from 3-digit to 2-digit codes (for Subtitle conversion)
+$std::lang_code_map_3_to_2 = {
+    "aar" => "aa",
+    "abk" => "ab",
+    "afr" => "af",
+    "aka" => "ak",
+    "alb" => "sq",
+    "amh" => "am",
+    "ara" => "ar",
+    "arg" => "an",
+    "arm" => "hy",
+    "asm" => "as",
+    "ava" => "av",
+    "ave" => "ae",
+    "aym" => "ay",
+    "aze" => "az",
+    "bak" => "ba",
+    "bam" => "bm",
+    "baq" => "eu",
+    "bel" => "be",
+    "ben" => "bn",
+    "bih" => "bh",
+    "bis" => "bi",
+    "bos" => "bs",
+    "bre" => "br",
+    "bul" => "bg",
+    "bur" => "my",
+    "cat" => "ca",
+    "cha" => "ch",
+    "che" => "ce",
+    "chi" => "zh",
+    "chu" => "cu",
+    "chv" => "cv",
+    "cor" => "kw",
+    "cos" => "co",
+    "cre" => "cr",
+    "cze" => "cs",
+    "dan" => "da",
+    "div" => "dv",
+    "dut" => "nl",
+    "dzo" => "dz",
+    "eng" => "en",
+    "epo" => "eo",
+    "est" => "et",
+    "ewe" => "ee",
+    "fao" => "fo",
+    "fij" => "fj",
+    "fin" => "fi",
+    "fre" => "fr",
+    "fry" => "fy",
+    "ful" => "ff",
+    "geo" => "ka",
+    "ger" => "de",
+    "gla" => "gd",
+    "gle" => "ga",
+    "glg" => "gl",
+    "glv" => "gv",
+    "gre" => "el",
+    "grn" => "gn",
+    "guj" => "gu",
+    "hau" => "ha",
+    "heb" => "iw",
+    "her" => "hz",
+    "hin" => "hi",
+    "hmo" => "ho",
+    "hrv" => "hr",
+    "hun" => "hu",
+    "ibo" => "ig",
+    "ice" => "is",
+    "ido" => "io",
+    "iii" => "ii",
+    "iku" => "iu",
+    "ile" => "ie",
+    "ina" => "ia",
+    "ind" => "id",
+    "ipk" => "ik",
+    "ita" => "it",
+    "jav" => "jv",
+    "jpn" => "ja",
+    "kal" => "kl",
+    "kan" => "kn",
+    "kas" => "ks",
+    "kau" => "kr",
+    "kaz" => "kk",
+    "khm" => "km",
+    "kik" => "ki",
+    "kin" => "rw",
+    "kir" => "ky",
+    "kom" => "kv",
+    "kon" => "kg",
+    "kor" => "ko",
+    "kua" => "kj",
+    "kur" => "ku",
+    "lao" => "lo",
+    "lat" => "la",
+    "lav" => "lv",
+    "lim" => "li",
+    "lin" => "ln",
+    "lit" => "lt",
+    "ltz" => "lb",
+    "lub" => "lu",
+    "lug" => "lg",
+    "mac" => "mk",
+    "mah" => "mh",
+    "mal" => "ml",
+    "mao" => "mi",
+    "mar" => "mr",
+    "may" => "ms",
+    "mlg" => "mg",
+    "mlt" => "mt",
+    "mol" => "mo",
+    "mon" => "mn",
+    "nau" => "na",
+    "nav" => "nv",
+    "nbl" => "nr",
+    "nde" => "nd",
+    "nde" => "nd",
+    "ndo" => "ng",
+    "nep" => "ne",
+    "nno" => "nn",
+    "nno" => "nn",
+    "nor" => "no",
+    "nya" => "ny",
+    "oci" => "oc",
+    "oji" => "oj",
+    "ori" => "or",
+    "orm" => "om",
+    "oss" => "os",
+    "pan" => "pa",
+    "per" => "fa",
+    "pli" => "pi",
+    "pol" => "pl",
+    "por" => "pt",
+    "pus" => "ps",
+    "que" => "qu",
+    "roh" => "rm",
+    "rum" => "ro",
+    "run" => "rn",
+    "rus" => "ru",
+    "sag" => "sg",
+    "san" => "sa",
+    "scc" => "sr",
+    "sin" => "si",
+    "slo" => "sk",
+    "slv" => "sl",
+    "sme" => "se",
+    "smo" => "sm",
+    "sna" => "sn",
+    "snd" => "sd",
+    "som" => "so",
+    "sot" => "st",
+    "spa" => "es",
+    "spa" => "es",
+    "srd" => "sc",
+    "ssw" => "ss",
+    "sun" => "su",
+    "swa" => "sw",
+    "swe" => "sv",
+    "tah" => "ty",
+    "tam" => "ta",
+    "tat" => "tt",
+    "tel" => "te",
+    "tgk" => "tg",
+    "tgl" => "tl",
+    "tha" => "th",
+    "tib" => "bo",
+    "tir" => "ti",
+    "ton" => "to",
+    "tsn" => "tn",
+    "tso" => "ts",
+    "tuk" => "tk",
+    "tur" => "tr",
+    "twi" => "tw",
+    "uig" => "ug",
+    "ukr" => "uk",
+    "urd" => "ur",
+    "uzb" => "uz",
+    "ven" => "ve",
+    "vie" => "vi",
+    "vol" => "vo",
+    "wel" => "cy",
+    "wln" => "wa",
+    "wol" => "wo",
+    "xho" => "xh",
+    "yid" => "yi",
+    "yor" => "yo",
+    "zha" => "za",
+    "zha" => "za",
+    "zul" => "zu",
+};
+
+# Language mappings from 2-digit to 3-digit codes (for Subtitle conversion)
+$std::lang_code_map_2_to_3 = {
+    "ab" => "abk",
+    "aa" => "aar",
+    "af" => "afr",
+    "ak" => "aka",
+    "sq" => "alb",
+    "am" => "amh",
+    "ar" => "ara",
+    "an" => "arg",
+    "hy" => "arm",
+    "as" => "asm",
+    "av" => "ava",
+    "ae" => "ave",
+    "ay" => "aym",
+    "az" => "aze",
+    "bm" => "bam",
+    "ba" => "bak",
+    "eu" => "baq",
+    "be" => "bel",
+    "bn" => "ben",
+    "bh" => "bih",
+    "bi" => "bis",
+    "bs" => "bos",
+    "br" => "bre",
+    "bg" => "bul",
+    "my" => "bur",
+    "es" => "spa",
+    "ca" => "cat",
+    "ch" => "cha",
+    "ce" => "che",
+    "ny" => "nya",
+    "ny" => "nya",
+    "zh" => "chi",
+    "za" => "zha",
+    "cu" => "chu",
+    "cu" => "chu",
+    "cu" => "chu",
+    "cv" => "chv",
+    "kw" => "cor",
+    "co" => "cos",
+    "cr" => "cre",
+    "hr" => "hrv",
+    "cs" => "cze",
+    "da" => "dan",
+    "dv" => "div",
+    "nl" => "dut",
+    "dz" => "dzo",
+    "en" => "eng",
+    "eo" => "epo",
+    "et" => "est",
+    "ee" => "ewe",
+    "fo" => "fao",
+    "fj" => "fij",
+    "fi" => "fin",
+    "fr" => "fre",
+    "fy" => "fry",
+    "ff" => "ful",
+    "gd" => "gla",
+    "gl" => "glg",
+    "lg" => "lug",
+    "ka" => "geo",
+    "de" => "ger",
+    "ki" => "kik",
+    "el" => "gre",
+    "kl" => "kal",
+    "gn" => "grn",
+    "gu" => "guj",
+    "ha" => "hau",
+    "he" => "heb",
+    "iw" => "heb",
+    "hz" => "her",
+    "hi" => "hin",
+    "ho" => "hmo",
+    "hu" => "hun",
+    "is" => "ice",
+    "io" => "ido",
+    "ig" => "ibo",
+    "id" => "ind",
+    "ia" => "ina",
+    "ie" => "ile",
+    "iu" => "iku",
+    "ik" => "ipk",
+    "ga" => "gle",
+    "it" => "ita",
+    "ja" => "jpn",
+    "jv" => "jav",
+    "kl" => "kal",
+    "kn" => "kan",
+    "kr" => "kau",
+    "ks" => "kas",
+    "kk" => "kaz",
+    "km" => "khm",
+    "ki" => "kik",
+    "rw" => "kin",
+    "ky" => "kir",
+    "kv" => "kom",
+    "kg" => "kon",
+    "ko" => "kor",
+    "kj" => "kua",
+    "ku" => "kur",
+    "kj" => "kua",
+    "lo" => "lao",
+    "la" => "lat",
+    "lv" => "lav",
+    "lb" => "ltz",
+    "li" => "lim",
+    "li" => "lim",
+    "li" => "lim",
+    "ln" => "lin",
+    "lt" => "lit",
+    "lu" => "lub",
+    "lb" => "ltz",
+    "mk" => "mac",
+    "mg" => "mlg",
+    "ms" => "may",
+    "ml" => "mal",
+    "mt" => "mlt",
+    "gv" => "glv",
+    "mi" => "mao",
+    "mr" => "mar",
+    "mh" => "mah",
+    "mo" => "mol",
+    "mn" => "mon",
+    "na" => "nau",
+    "nv" => "nav",
+    "nv" => "nav",
+    "nd" => "nde",
+    "nr" => "nbl",
+    "ng" => "ndo",
+    "ne" => "nep",
+    "nd" => "nde",
+    "se" => "sme",
+    "nn" => "nno",
+    "no" => "nor",
+    "ny" => "nya",
+    "nn" => "nno",
+    "oc" => "oci",
+    "oj" => "oji",
+    "cu" => "chu",
+    "cu" => "chu",
+    "cu" => "chu",
+    "or" => "ori",
+    "om" => "orm",
+    "os" => "oss",
+    "os" => "oss",
+    "pi" => "pli",
+    "pa" => "pan",
+    "fa" => "per",
+    "pl" => "pol",
+    "pt" => "por",
+    "oc" => "oci",
+    "ps" => "pus",
+    "qu" => "que",
+    "rm" => "roh",
+    "ro" => "rum",
+    "rn" => "run",
+    "ru" => "rus",
+    "sm" => "smo",
+    "sg" => "sag",
+    "sa" => "san",
+    "sc" => "srd",
+    "gd" => "gla",
+    "sr" => "scc",
+    "sn" => "sna",
+    "ii" => "iii",
+    "sd" => "snd",
+    "si" => "sin",
+    "sk" => "slo",
+    "sl" => "slv",
+    "so" => "som",
+    "st" => "sot",
+    "nr" => "nbl",
+    "es" => "spa",
+    "su" => "sun",
+    "sw" => "swa",
+    "ss" => "ssw",
+    "sv" => "swe",
+    "tl" => "tgl",
+    "ty" => "tah",
+    "tg" => "tgk",
+    "ta" => "tam",
+    "tt" => "tat",
+    "te" => "tel",
+    "th" => "tha",
+    "bo" => "tib",
+    "ti" => "tir",
+    "to" => "ton",
+    "ts" => "tso",
+    "tn" => "tsn",
+    "tr" => "tur",
+    "tk" => "tuk",
+    "tw" => "twi",
+    "ug" => "uig",
+    "uk" => "ukr",
+    "ur" => "urd",
+    "uz" => "uzb",
+    "ve" => "ven",
+    "vi" => "vie",
+    "vo" => "vol",
+    "wa" => "wln",
+    "cy" => "wel",
+    "wo" => "wol",
+    "xh" => "xho",
+    "yi" => "yid",
+    "yo" => "yor",
+    "za" => "zha",
+    "zu" => "zul",
+};
+
+
+my $global_parameters = [
+    "profile",                	
+    "containerformat",		
+    "debug",
+];
+			
+my $bluray_info_parameters = [
+    "bluray_repeats", 		
+    "bluray_seconds", 		
+    "bluray_dups", 		
+    "bluray_chapter", 		
+    "bluray_subtitleconvert", 	
+    "bluray_fps", 			
+    "bluray_videoformat", 		
+    "bluray_reduce_streams", 	
+    "bluray_extract_core", 	
+    "bluray_start_tsMuxeR",
+];
+
+my $avi2mkv_parameters = [ 	
+    "avi2mkv_audiotarget", 	
+    "avi2mkv_normalize_audio", 	
+    "avi2mkv_setaudiovolume", 	
+    "avi2mkv_usestereo", 		
+    "avi2mkv_pan", 		
+    "avi2mkv_channels",  
+];
+		
+my $blu2mkv_parameters = [ 	
+    "blu2mkv_resolution", 		
+    "blu2mkv_bitrate", 		
+    "blu2mkv_cropborders", 	
+    "blu2mkv_expandvideo", 	
+    "blu2mkv_extractcorestream", 	
+    "blu2mkv_interlaced", 		
+    "blu2mkv_process_subtitles", 	
+    "blu2mkv_convert_sup", 	
+    "blu2mkv_TMPPATH", 		
+    "blu2mkv_OUTPUTPATH", 		
+];
+		
+my $riptoh264_parameters = [ 	
+    "riptoh264_noisereduction", 	
+    "riptoh264_interlaced", 	
+    "riptoh264_crop", 		
+    "riptoh264_expandvideo", 	
+    "riptoh264_expandif", 		
+    "riptoh264_secondaudiofirst", 	
+    "riptoh264_subtitles", 	
+    "riptoh264_processallsubs", 	
+    "riptoh264_ripall", 		
+    "riptoh264_min_title_length", 	
+    "riptoh264_TMPPATH", 		
+    "riptoh264_OUTPUTPATH", 	
+    "riptoh264_FORMAT", 		
+    "riptoh264_BITRATE", 		
+    "riptoh264_audiotarget", 	
+    "riptoh264_singleaudio", 	
+    "riptoh264_directory", 	
+    "riptoh264_TELECINE_METHOD", 	
+    "riptoh264_rawcommand", 	
+    "riptoh264_override_video_encoder",
+];
+		
+my $menc_parameters = [ 	
+    "menc_TMPPATH", 		
+    "menc_OUTPUTPATH", 		
+    "menc_twopass", 		
+    "menc_interlaced", 		
+    "menc_widescreen", 		
+    "menc_audiotarget", 		
+    "menc_reverse", 		
+    "menc_noise_reduction", 	
+    "menc_cropborders", 		
+    "menc_expandvideo", 		
+    "menc_BITRATE", 		
+    "menc_rawcommand", 		
+    "menc_targetwidth", 		
+    "menc_targetheight", 		
+    "menc_override_video_encoder", 
+    "menc_singleaudio",
+    "menc_process_subtitles",
+    "menc_convert_sup",
+];
+
+
+my $config_default_values = {
+    "profile"                		=> "profile                        = nq",
+    "containerformat" 			=> "containerformat                = mkv",
+    "debug" 				=> "debug                          = no",
+    "bluray_repeats" 			=> "bluray_repeats                 = 1",
+    "bluray_seconds" 			=> "bluray_seconds                 = 300",
+    "bluray_dups" 			=> "bluray_dups                    = 1",
+    "bluray_chapter" 			=> "bluray_chapter                 = no", 
+    "bluray_subtitleconvert" 		=> "bluray_subtitleconvert         = no",
+    "bluray_fps" 			=> "bluray_fps                     = 0",
+    "bluray_videoformat" 		=> "bluray_videoformat             = keep",
+    "bluray_reduce_streams" 		=> "bluray_reduce_streams          = yes",
+    "bluray_extract_core" 		=> "bluray_extract_core            = no",
+    "bluray_start_tsMuxeR" 		=> "bluray_start_tsMuxeR           = no",
+    "avi2mkv_audiotarget" 		=> "avi2mkv_audiotarget            = copy", 
+    "avi2mkv_normalize_audio" 		=> "avi2mkv_normalize_audio        = no",
+    "avi2mkv_setaudiovolume" 		=> "avi2mkv_setaudiovolume         =  ",
+    "avi2mkv_usestereo" 		=> "avi2mkv_usestereo              = no", 
+    "avi2mkv_pan" 			=> "avi2mkv_pan                    =  ",
+    "avi2mkv_channels"  		=> "avi2mkv_channels               = ",
+    "blu2mkv_resolution" 		=> "blu2mkv_resolution             = 1920:1080",
+    "blu2mkv_bitrate" 			=> "blu2mkv_bitrate                = 6000 ",
+    "blu2mkv_cropborders" 		=> "blu2mkv_cropborders            = no",
+    "blu2mkv_expandvideo" 		=> "blu2mkv_expandvideo            = no",
+    "blu2mkv_extractcorestream" 	=> "blu2mkv_extractcorestream      = no",
+    "blu2mkv_interlaced" 		=> "blu2mkv_interlaced             = no", 
+    "blu2mkv_process_subtitles" 	=> "blu2mkv_process_subtitles      = no", 
+    "blu2mkv_convert_sup" 		=> "blu2mkv_convert_sup            = no", 
+    "blu2mkv_TMPPATH" 			=> "blu2mkv_TMPPATH =",
+    "blu2mkv_OUTPUTPATH" 		=> "blu2mkv_OUTPUTPATH = ",
+    "riptoh264_noisereduction" 		=> "riptoh264_noisereduction       = no",
+    "riptoh264_interlaced" 		=> "riptoh264_interlaced           = no", 
+    "riptoh264_crop" 			=> "riptoh264_crop                 = no",
+    "riptoh264_expandvideo" 		=> "riptoh264_expandvideo          = no", 
+    "riptoh264_expandif" 		=> "riptoh264_expandif             = no", 
+    "riptoh264_secondaudiofirst" 	=> "riptoh264_secondaudiofirst     = no", 
+    "riptoh264_subtitles" 		=> "riptoh264_subtitles            = no", 
+    "riptoh264_processallsubs" 		=> "riptoh264_processallsubs       = no",
+    "riptoh264_ripall" 			=> "riptoh264_ripall               = no",
+    "riptoh264_min_title_length" 	=> "riptoh264_min_title_length     = 120",
+    "riptoh264_TMPPATH" 		=> "riptoh264_TMPPATH              = ",
+    "riptoh264_OUTPUTPATH" 		=> "riptoh264_OUTPUTPATH           = ",
+    "riptoh264_FORMAT" 			=> "riptoh264_FORMAT               = PAL",
+    "riptoh264_BITRATE" 		=> "riptoh264_BITRATE              = 1200",
+    "riptoh264_audiotarget" 		=> "riptoh264_audiotarget          = copy",
+    "riptoh264_singleaudio" 		=> "riptoh264_singleaudio          = no",
+    "riptoh264_directory" 		=> "riptoh264_directory            = no",
+    "riptoh264_TELECINE_METHOD" 	=> "riptoh264_TELECINE_METHOD      = 25p telecined to 25i", 
+    "riptoh264_rawcommand" 		=> "riptoh264_rawcommand = ",
+    "riptoh264_override_video_encoder" 	=> "riptoh264_override_video_encoder    = ",
+    "menc_TMPPATH" 			=> "menc_TMPPATH                   = ", 
+    "menc_OUTPUTPATH" 			=> "menc_OUTPUTPATH                = ",
+    "menc_twopass" 			=> "menc_twopass                   = no",
+    "menc_interlaced" 			=> "menc_interlaced                = no",
+    "menc_widescreen" 			=> "menc_widescreen                = no",
+    "menc_audiotarget" 			=> "menc_audiotarget               = copy",
+    "menc_reverse" 			=> "menc_reverse                   = no", 
+    "menc_noise_reduction" 		=> "menc_noise_reduction           = no",
+    "menc_cropborders" 			=> "menc_cropborders               = no",
+    "menc_expandvideo" 			=> "menc_expandvideo               = no",
+    "menc_BITRATE" 			=> "menc_BITRATE                   = 0",
+    "menc_rawcommand" 			=> "menc_rawcommand                = ", 
+    "menc_targetwidth" 			=> "menc_targetwidth               = ", 
+    "menc_targetheight" 		=> "menc_targetheight              = ", 
+    "menc_override_video_encoder" 	=> "menc_override_video_encoder    = ", 
+    "menc_singleaudio"                  => "menc_singleaudio               = no",
+    "menc_process_subtitles"            => "menc_process_subtitles         = no",
+    "menc_convert_sup"                  => "menc_convert_sup               = no",
+};
+
+
+my $config_default_comments = {
+    "profile" => "# x264 encoding preset",
+    "containerformat" => "# Container format for muxing. valid options are: mkv mp4 ts ogm avi\n# When set to avi, avi2mkv is not called for muxing and therefore no audio conversion or\n# other container feature are available",
+    "debug" => "# Debugging mode", 
+    "bluray_repeats" => "# number of allowed repeats of Clips",
+    "bluray_seconds" => "# length shortest track used (in seconds)",
+    "bluray_dups" => "# number of duplicate clips allowed",
+    "bluray_chapter" => "# export chaptermarks", 
+    "bluray_subtitleconvert" => "# export and convert subtitles",
+    "bluray_fps" => "# target video frame rate for subtitle conversion\n# Default: 0 for keep source fps",
+    "bluray_videoformat" => "# target video size for subtitle conversion\n# Default: keep",
+    "bluray_reduce_streams" => "# reduce streams to preferred languages",
+    "bluray_extract_core" => "# extract core stream of DTS ES or TrueHD",
+    "bluray_start_tsMuxeR" => "# automatically start tsMuxeR to export to TS container (if available)",
+    "avi2mkv_audiotarget" => "# ouput format for audio streams. Valid options are copy, aac, ac3, ogg, flac, mp3. Default: copy", 
+    "avi2mkv_normalize_audio" => "# normalize audio streams while reencoding (not when audiotarget is set to \"copy\")",
+    "avi2mkv_setaudiovolume" => "# set audio volume to specified value while reencoding (not when audiotarget is set to \"copy\")",
+    "avi2mkv_usestereo" => "# convert 5.1 or more-stream format to stereo (not when audiotarget is set to \"copy\")", 
+    "avi2mkv_pan" => "# audio panning matrix when converting to stereo audio (not when audiotarget is set to \"copy\")",
+    "avi2mkv_channels" => "# channel mapping for conversion of multi-channel audio formats.  (not when audiotarget is set to \"copy\")",
+    "blu2mkv_resolution" => "# Default resolution of video (valid values: 1920:1080 and 1280:720",
+    "blu2mkv_bitrate" => "# Video bitrate. For most 1080p movies 6000 is sufficient in the nq profile",
+    "blu2mkv_cropborders" => "# automatically Crop black borders? (yes or no)",
+    "blu2mkv_expandvideo" => "# automatically expand video geometry to reach 16/9 aspect ratio\n# (by appending black borders)? (yes or no)",
+    "blu2mkv_extractcorestream" => "# strip down DTS-HD and TrueHD audio sources to DTS and AC3 5.1 respectively",
+    "blu2mkv_interlaced" => "# Treat source as interlaced (aka. De-interlace). Warning: Slow!", 
+    "blu2mkv_process_subtitles" => "# process subtitles (if input container has them)", 
+    "blu2mkv_convert_sup" => "# convert all SUP subtitles to vobsub format", 
+    "blu2mkv_TMPPATH" => "# Path to store temporary files (Default: current working directory)",
+    "blu2mkv_OUTPUTPATH" => "# Path to store output files (Default: current working directory)",
+    "riptoh264_noisereduction" => "# activate dynamic noise reduction? (yes or no) WARNING: REALLY SLOW!",
+    "riptoh264_interlaced" => "# Treat source as interlaced (deinterlace). Warning: slow!", 
+    "riptoh264_crop" => "# automatically Crop black borders? (yes or no)",
+    "riptoh264_expandvideo" => "# add black borders to reach 16/9 aspect ratio", 
+    "riptoh264_expandif" => "# automatically crop black borders and expand to 16/9 if source is not anamorphic", 
+    "riptoh264_secondaudiofirst" => "# put second audio stream first in final container?", 
+    "riptoh264_subtitles" => "# put subtitles in output container? (yes or no) WARNING: Ripping subtitles is VERY slow!", 
+    "riptoh264_processallsubs" => "# process all subtitles regardless of the language\n# Default: process only subtitles with preferred languages",
+    "riptoh264_ripall" => "# rip all titles of the disk (longer than min_title_length seconds)",
+    "riptoh264_min_title_length" => "# minimum length of titles in seconds when processing all titles of a DVD",
+    "riptoh264_TMPPATH" => "# Path to store temporary files (Default: subdirectory in current working directory)",
+    "riptoh264_OUTPUTPATH" => "# Path to store output files (Default: current working directory)",
+    "riptoh264_FORMAT" => "# video standard PAL/NTSC",
+    "riptoh264_BITRATE" => "# Video bitrate. For h.264 1200 is more than sufficient for most DVD movies",
+    "riptoh264_audiotarget" => "# audio format for output container (passed to avi2mkv for audio processing)\n# valid options: copy ac3 aac ogg flac mp3",
+    "riptoh264_singleaudio" => "# Use only one audio stream (the first of the preffered languages that is available). (yes or no)",
+    "riptoh264_directory" => "# use directory mode. (yes or no)\n# This reads ISO images or dvd directory structures.",
+    "riptoh264_TELECINE_METHOD" => "# interlacing/telecining method (as detection does not work atm)", 
+    "riptoh264_rawcommand" => "# rawcommand passed to mencoder (for options not supported by riptoh264 script)",
+    "riptoh264_override_video_encoder" => "# use own encoder configuration instead of x264\n# this overrides anything - including bitrate settings - besides the one- or twopass setting\n# and any video filters applied \n# Example: \n# -ffourcc DX50 -ovc lavc -lavcopts vcodec=mpeg4:vbitrate=2000:vhq:keyint=15",
+    "menc_TMPPATH" => "# Path to store temporary files (Default: current working directory)", 
+    "menc_OUTPUTPATH" => "# Path to store output files (Default: current working directory)",
+    "menc_twopass" => "# encode video in two-pass mode? (Default: no)",
+    "menc_interlaced" => "# treat source as interlaced?",
+    "menc_widescreen" => "# force widescreen handling on source (default: no)",
+    "menc_audiotarget" => "# audio format for output container (passed to avi2mkv for audio processing)\n# valid options: copy ac3 aac ogg flac mp3",
+    "menc_reverse" => "# reverse first two audio streams (if singleaudio is not selected)", 
+    "menc_noise_reduction" => "# video noise reduction (Warning: Slow!)",
+    "menc_cropborders" => "# automatically crop black borders? (default: no)",
+    "menc_expandvideo" => "# after cropping black borders expand video to reach a 16:9 aspect ratio? (default: no)",
+    "menc_BITRATE" => "# video bitrate (if 0, bitrate will be adjusted to video geometry automatically)",
+    "menc_rawcommand" => "# rawcommand passed to mencoder (for options not supported by menc script)", 
+    "menc_targetwidth" => "# target video with ", 
+    "menc_targetheight" => "# target video height", 
+    "menc_override_video_encoder" => "# use own encoder configuration instead of x264\n# this overrides anything - including bitrate settings - besides the one- or twopass setting\n# and any video filters applied \n# Example: \n# -ffourcc DX50 -ovc lavc -lavcopts vcodec=mpeg4:vbitrate=2000:vhq:keyint=15",    
+    "menc_singleaudio" => "# process only the first audio stream (matching the language parameter if available)",
+    "menc_process_subtitles" => "# process available subtitles in source file",
+    "menc_convert_sup" => "# convert SUP format subtitles to VOBSub format",
+};
+
+##########################################################################################################
+# Misc tools                                                                                             #
+##########################################################################################################
+sub bin2dec {
+    return unpack("N", pack("B32", substr("0" x 32 . shift, -32)));
+}
+
+sub dec2bin {
+    my $str = unpack("B32", pack("N", shift));
+#    $str =~ s/^0+(?=\d)//;   # otherwise you'll get leading zeros # we want leading zeros here
+    return "$str";
+}
+
+sub lookup_str ()
+{
+    # return a string matching a key in a hash
+    my $hashref = shift; 
+    my $key = shift; 
+    $hashref->{$key};
+}
+
+sub compare_string_array ()
+{
+    # see if a string matches an element of array
+    my $string = shift; 
+    my $arrayref = shift; 
+    my $ret = 0;
+    foreach (@$arrayref) {
+	if ($_ eq $string) {
+	    $ret = 1;
+	    last;
+	}
+    }
+    $ret;
+}
+
+sub clean_tmpdir () 
+{
+    my $LOG = shift;
+    my $dir = shift;  
+    use File::Path;
+    rmtree($dir);
+}
+
+##########################################################################################################
+# file information routines                                                                              #
+##########################################################################################################
+sub identify_file ()
+{
+#   my $LOG = shift;
+    my $filename = shift;
+    my $result = "Unknown :(";
+    # reimplement the necessary part of the UNIX file command
+    my @tests = (
+	{ name => "Theora/VP3 Video", position => 28, code => '\x80theora' , type => "mixed" },
+	{ name => "Raw DV Video", position => 4, code => '\x01' , type => "byte" },
+	{ name => "AVI", position => 0, code => 'RIFF', type => "string" },
+	{ name => "Microsoft ASF", position => 0, code => '3026b275' , type => "long" },
+	{ name => "Apple QuickTime", position => 4, code => 'moov', type => "string" },
+	{ name => "Apple QuickTime", position => 4, code => 'mdat', type => "string" },
+	{ name => "Apple QuickTime", position => 4, code => 'wide', type => "string" },
+	{ name => "Apple QuickTime", position => 4, code => 'skip', type => "string" },
+	{ name => "Apple QuickTime", position => 4, code => 'free', type => "string" },
+	{ name => "Apple QuickTime", position => 4, code => 'idsc', type => "string" },
+	{ name => "Apple QuickTime", position => 4, code => 'pckg', type => "string" },
+	{ name => "Apple QuickTime", position => 8, code => 'qt', type => "string" },
+	{ name => "MPEG Transport Stream", position => 0, code => '47400010', type => "long" },
+	{ name => "OGM video", position => 28, code => '\x01video\0\0\0', type => "mixed" },
+	{ name => "Matroska", position => 0, code => '1a45dfa3' , type => "long" },
+	{ name => "MP4/3GP/3G2 ISO Media", position => 4, code => 'ftyp', type => "string" },
+	{ name => "Real Media", position => 0, code => '.RMF', type => "string" },
+	{ name => "Flash Video", position => 0, code => 'FLV', type => "string" },
+    ); 
+
+
+    open my $FILE, '<', $filename or die "Unable to open $filename:$!\n";
+    foreach (@tests) {
+	seek ( $FILE, $_->{position}, 0);
+	my $readvalue;
+	my $length;
+
+	if ($_->{type} =~ /string/) {
+	    $length = length $_->{code};
+	    read $FILE,$readvalue,$length;
+	    if ($_->{code} eq unpack ('A*', $readvalue)) {
+		$result = $_->{name};
+		last;
+	    }
+	}
+	elsif ($_->{type} =~ /long/) {
+	    $length = 4;
+	    read $FILE,$readvalue,$length;
+	    if ($_->{code} eq unpack ('H*', $readvalue)) {
+		$result = $_->{name};
+		last;
+	    }
+	}
+	elsif ($_->{type} =~ /byte/) {
+	    $length = 1;
+	    read $FILE,$readvalue,$length;
+	    if ($_->{code} eq unpack ('H', $readvalue)) {
+		$result = $_->{name};
+		last;
+	    }
+	}
+	elsif ($_->{type} =~ /hex/) {
+	    $length = length $_->{code} / 2;
+	    read $FILE,$readvalue,$length;
+	    if ($_->{code} eq unpack ('H*', $readvalue)) {
+		$result = $_->{name};
+		last;
+	    }
+	}
+    }
+    close ($FILE);
+    return $result;
+}
+
+sub find_language ()
+{
+    my $lang = shift;
+    my $ret = &lookup_str ($std::iso639_language_code_map, $lang);
+    if (defined $ret) {
+	return $ret;
+    } else {
+	return "";
+    } 
+}
+
+sub find_twodigit_langcode ()
+{
+    my $lang = shift;
+    my $ret = &lookup_str ($std::lang_code_map_3_to_2, $lang);
+    if ((defined $ret) && ($ret =~ /^\w{2}/)) {
+	return $ret;
+    } else {
+	return "no_language_information";
+    } 
+}
+
+sub find_threedigit_langcode ()
+{
+    my $lang = shift;
+    my $ret = &lookup_str ($std::lang_code_map_2_to_3, $lang);
+    if ((defined $ret) && ($ret =~ /^\w{2}/)) {
+	return $ret;
+    } else {
+	return "no_language_information";
+    } 
+}
+
+sub find_non_standard_language ($$\@)
+{
+    my $filetype = shift;
+    my $lang = shift;
+    my @array = @{(shift)};
+    my $ret;
+    my $trans; 
+    my $lang2;
+    my %lang_to_trans;
+    while (($trans,$lang2) = each(%$std::known_translations)) {
+	$lang_to_trans{$lang2} = () unless ($lang_to_trans{$lang2}); 
+	push(@{$lang_to_trans{$lang2}}, $trans);
+    }
+    foreach my $test (@{$lang_to_trans{$lang}}) {
+	print STDERR "language not found. trying to match languages with list of known translations\n";
+	# audio not found, trying known translations
+	if ($filetype eq "MPEG Transport Stream") {
+	    my @temp = grep (s/ID_AID_(\d+)_LANG=$test/$1/, @array);
+	    if (@temp) {
+		chomp @temp;
+		my $lowest = 9000;
+		foreach (@temp) {
+		    $lowest = $_ if ($_ < $lowest);
+		}
+		$ret = $lowest if ($lowest < 9000); 
+	    }        
+	} else {
+	    my @temp = grep (m/.*-alang\s+$test.*/, @array);
+	    if (@temp) {
+		chomp $temp[0];
+		# for the moment just use the first audio stream matching the language
+		$temp[0] =~ m/.*-aid\s+(\d+).*/;
+		$ret = $1;
+		# further processing later
+	    }
+	}
+    }
+
+    if ((defined $ret) && ($ret >= 0)) {
+	return $ret;
+    } else {
+	return undef;
+    }
+}
+
+sub find_audio_stream ($$\@$)
+{
+    my $filetype = shift;
+    my $lang = shift;
+    my @array = @{(shift)};
+    my $twodigit = shift;
+    my $ret;
+    print STDERR "file type is $filetype\n";
+    if ($twodigit) {
+	my $lang2 = &find_twodigit_langcode($lang);
+	$lang = $lang2 if ($lang2);
+    }
+    if ($filetype eq "MPEG Transport Stream") {
+	my @temp = grep (s/ID_AID_(\d+)_LANG=$lang/$1/, @array);
+	if (@temp) {
+	    chomp @temp;
+	    my $lowest = 9000;
+	    foreach (@temp) {
+		$lowest = $_ if ($_ < $lowest);
+	    }
+	    return $lowest if ($lowest < 9000); 
+	} else {
+	    return "no_language_information";
+	}        
+    } else {
+	my @temp = grep (m/.*-alang\s+$lang.*/, @array);
+	if (@temp) {
+	    chomp $temp[0];
+	    # for the moment just use the first audio stream matching the language
+	    $temp[0] =~ m/.*-aid\s+(\d+).*/;
+	    $ret = $1;
+	    # further processing later
+	}
+	if ((defined $ret) && ($ret >= 0)) {
+	    return $ret;
+	} else {
+	    $ret = &find_non_standard_language ($filetype, $lang, \@array);
+	if ((defined $ret) && ($ret >= 0)) {
+	    return $ret;
+	} else {
+	    return "no_language_information";
+	}
+    }
+}
+}
+
+sub get_movie_parameters ($\@)
+{
+    my $opt = shift;
+    my @array = @{(shift)};
+#   print STDERR "Toolbox get_movie_parameters\n" if $opt->{debug};
+
+#    print STDERR Dumper (@array) if $opt->{debug};
+    my $regex = qr/\s*ID_VIDEO_WIDTH\s*=\s*(\d+)/;
+    ($opt->{SRC_WIDTH}) = grep (s/$regex/$1/, @array);
+    chomp ($opt->{SRC_WIDTH});
+    $regex = qr/\s*ID_VIDEO_HEIGHT\s*=\s*(\d+)/;
+    ($opt->{SRC_HEIGHT}) = grep (s/$regex/$1/, @array);
+    chomp ($opt->{SRC_HEIGHT});
+    $regex = qr/\s*ID_VIDEO_FPS\s*=\s*(\d+)/;
+    ($opt->{SRC_FPS}) = grep (s/$regex/$1/, @array);
+    chomp ($opt->{SRC_FPS});
+    $opt->{SRC_ASPECT} = $opt->{SRC_WIDTH} / $opt->{SRC_HEIGHT};
+}
+
+sub detect_crop ()
+{
+    my $LOG = shift;
+    my $opt = shift;
+    my $mplayer = shift;
+    my $input = shift;
+    printf $LOG "Detecting crop window: \n";
+    my $WIDTH=0;
+    my $HEIGHT=0;
+    my $LEFT=0;
+    my $TOP=0;
+    print STDERR "Toolbox detect_crop\n" if $opt->{debug};
+    print STDERR "mplayer is $mplayer\n" if $opt->{debug};
+    print STDERR "inputfile is $input\n" if $opt->{debug};
+    for (my $I = 1; $I <= 10 ; $I++) {
+	my $OFFSET = 30 * $I;
+	print $LOG "$mplayer $input -vo null -nosound -benchmark -vf cropdetect=24:0 -ss $OFFSET -frames 4 2>&1\n" if $opt->{debug};
+	my @ret=`$mplayer $input -vo null -nosound -benchmark -vf cropdetect=24:0 -ss $OFFSET -frames 4 2>&1`;
+#   print STDERR "ret is " . join (' ', @ret) . "\n" if $opt->{debug};
+	my ($cropstring) = grep (s/.*crop=(-?\d+:-?\d+:-?\d+:-?\d+).*/$1/, @ret);
+	print STDERR "cropstring is $cropstring\n" if $opt->{debug};
+	chomp $cropstring;
+	my @temp = split (/:/, $cropstring);
+	my $NEWWIDTH = $temp[0];
+	if ($NEWWIDTH) {
+	    if ( $WIDTH < $NEWWIDTH ) {
+		$WIDTH = $NEWWIDTH;
+		$LEFT = $temp[2];
+	    }
+	}
+	my $NEWHEIGHT = $temp[1];
+	if ($NEWHEIGHT) {
+	    if ( $HEIGHT < $NEWHEIGHT ) {
+		$HEIGHT = $NEWHEIGHT;
+		$TOP = $temp[3];
+	    }
+	}
+    }
+    $opt->{CROP} ="$WIDTH:$HEIGHT:$LEFT:$TOP";
+    printf $LOG $opt->{CROP} . "\n";
+}
+
+sub interlacing_detection ()
+{
+    my $opt = shift;
+    my $mediainfo = shift;
+    if ( -x "$mediainfo" ) {
+	my @ret = `$mediainfo $opt->{input}`;
+	if ( 0 < scalar (grep (/Interlaced/, @ret))) {
+	    $opt->{interlaced}  = "yes";
+	}
+    }
+}
+
+sub extract_chapters ($$$$\@)
+{
+    my $LOG = shift;
+    my $opt = shift; 
+    my $workdir = shift; 
+    my $filename = shift; 
+    my @array = @{(shift)};
+
+    my $chapterfile = catfile($workdir, $filename . '_chapters.txt');
+#    my $chapterfile = $workdir . "/" . $filename . "_chapters.txt";
+    if ( -f "$chapterfile" ) {
+	print  $chapterfile . " already exists, removing!\n";
+	unlink $chapterfile;
+    }
+    my @chapters = grep (s/\s*ID_CHAPTER_\d+_START\s*=\s*(\d+)/$1/, @array);
+    my $counter = 1;
+    if (@chapters > 0) {
+	open my $CHAP, '>', $chapterfile or die "Unable to open $chapterfile:$!\n";
+	foreach (@chapters) {
+	    chomp; 
+	    my $temp = sprintf "%010d", $_;
+	    $temp =~ m/(\d{7})(\d{3})/;
+	    my ($seconds, $ms) = ($1, $2, $3, $4);
+	    my $hours = int($seconds  / 3600 % 24);
+	    my $minutes = int($seconds / 60 % 60);
+	    $seconds = int($seconds % 60); 
+	    printf STDERR "CHAPTER%02d=%02d:%02d:%02d.%03d\n", $counter, $hours, $minutes, $seconds, $ms if $opt->{debug};
+	    printf STDERR "CHAPTER%02dNAME=Chapter %02d\n", $counter, $counter if $opt->{debug};
+	    printf $CHAP "CHAPTER%02d=%02d:%02d:%02d.%03d\n", $counter, $hours, $minutes, $seconds, $ms;
+	    printf $CHAP "CHAPTER%02dNAME=Chapter %02d\n", $counter, $counter;
+	    $counter++;
+	}
+        close ($CHAP);
+        $opt->{avi2mkv_chapters} = " -c " . $filename . "_chapters.txt" if (-f  $chapterfile);
+        print STDERR "avi2mkv_chapters is " . $opt->{avi2mkv_chapters} . "\n" if $opt->{debug};
+    }
+    else {
+	my ($line) = grep (s/\s*CHAPTERS:\s+(.+)/$1/, @array);
+	$line =~ s/(.+),$/$1/;
+        my @chapters = split (/,/, $line);
+	if (@chapters > 0) {
+	    open my $CHAP, '>', $chapterfile or die "Unable to open $chapterfile:$!\n";
+            foreach my $chaptermark (@chapters) {
+                printf $CHAP "CHAPTER%02d=%s\n", $counter, $chaptermark;
+                printf $CHAP "CHAPTER%02dNAME=Chapter %02d\n", $counter, $counter;
+                $counter++;
+	    }
+       	    close ($CHAP);
+            $opt->{avi2mkv_chapters} = " -c " . $filename . "_chapters.txt" if (-f  $chapterfile);
+            print STDERR "avi2mkv_chapters is " . $opt->{avi2mkv_chapters} . "\n" if $opt->{debug};
+	}
+    }
+}
+
+sub convert_sup_to_sub ()
+{
+    my $LOG         = shift;
+    my $opt         = shift;
+    my $progs       = shift;
+    my $infile      = shift;
+    print STDERR "Starting subtitle conversion for file $infile\n" if $opt->{debug};
+    my $outfile     = shift;
+    my $type        = shift;
+    my $outtype     = shift;
+    my $lang        = shift;
+    my $videoheight = shift;
+    my $subfps      = shift; 
+    my $workdir     = shift; 
+    my $basedir = cwd();
+
+    print STDERR "Starting subtitle conversion for file $infile\n" if $opt->{debug};
+    if ($type eq "SUP") {
+	if ($outtype eq "sub") {
+	    print STDERR " converting BD Sup to DVD vobsub\n" if $opt->{debug};
+	    if (($subfps == 23.976) || ($subfps == 24)) {
+		$subfps = "24p";
+	    } elsif ($subfps == 25) {
+		$subfps = "25p";
+	    } elsif ($subfps == 29.967) {
+		$subfps = "30p";
+	    } else {
+		$subfps = "keep";
+	    }
+
+	    if ( $videoheight == 576) {
+		$videoheight = "pal"; 
+	    } elsif ($videoheight == 480) {
+		$videoheight = "ntsc"; 
+	    }
+	    my $langcode = &lookup_str($std::lang_code_map_3_to_2, $lang);
+	    $langcode = 'en' unless (defined $langcode);
+
+	    my $command = sprintf "%s -jar %s \"%s\" \"%s\" /res:%s /dly:0.0 /fps:%s /lang:%s", 
+				   $progs->{java}, $progs->{BDSup2Sub}, $infile, $outfile, 
+				   $videoheight, $subfps, $langcode;
+	    print $LOG $command . "\n";
+	    chdir ($workdir);
+	    system ($command); 
+	    chdir ($basedir); 
+	    if ($opt->{sublist}) {
+		$opt->{sublist} = sprintf("%s,%s:%s", $opt->{sublist}, $outfile, $lang);
+	    } else {
+		$opt->{sublist} = sprintf("%s:%s", $outfile, $lang);
+	    }
+	}
+    }
+}
+
+sub extract_subtitles ()
+{
+    my $LOG       = shift;
+    my $opt       = shift;
+    my $progs     = shift;
+    my $inputfile = shift;
+    my $workdir   = shift; 
+    # Subtitle workarounds for matroska sources
+    my $mkvmerge_subtitle_list = "";
+    my $subfilename;
+    my $subformat;
+    my $subext;
+    my @sub_list; 
+    my @codec_list;
+    my @lang_list;
+    my @subfiles;
+    my @subexts;
+    my @streams;
+
+    print STDERR "file type in extract subtitles is $opt->{file_type}\n" if $opt->{debug};
+    if ($opt->{file_type} eq "Matroska") {
+	my @mkvmerge_info = `$progs->{mkvmerge} -i $inputfile`;
+	chomp @mkvmerge_info;
+	my @mkvinfo_info = `$progs->{mkvinfo}  $inputfile`;
+	chomp @mkvinfo_info;
+#      print STDERR Dumper @mkvmerge_info if $opt->{debug};
+
+	$opt->{nosub} = " -nosub " ;    # prevent forced subtitles from being hardcoded to the video by playing a sub not present
+
+	my @temp = grep (s/^\s*Track\s+ID\s+(\d+):\s+subtitles\s+\((.+)\).*/$1 $2/, @mkvmerge_info); 
+	chomp @temp;
+	for (my $i = 0; $i < @temp; $i++) {
+	    ($sub_list[$i], $codec_list[$i]) = split (' ', $temp[$i]);
+	}
+	#print STDERR Dumper @sub_list if $opt->{debug};
+	#print STDERR Dumper @codec_list if $opt->{debug};
+	my $line = 0;
+	my $i = 0;
+	my $subcount = 0;  
+	my $langcount = 0;  
+	foreach (@mkvinfo_info) {
+	    if (m/subtitle/) {
+		last if ($subcount > $langcount);
+		$subcount++;
+	    }
+	    elsif (m/Language:\s+(\w{3})/) {
+		next if ($subcount <= $langcount);
+		$lang_list[$i] = $1;
+		$langcount++;
+		$i++;
+	    }
+	    $line++;
+	}
+	chomp @lang_list;
+	for (my $i = 0 ; $i < @lang_list ; $i++) {
+	    my $temp = &lookup_str($std::known_translations, $lang_list[$i]);
+	    if ($temp) {
+		print STDERR "Subtitle language is found in known translations. Using $temp instead of $lang_list[$i]\n" if $opt->{debug};
+		$lang_list[$i] = $temp if ($temp);
+	    }
+	}
+
+	if ( @sub_list > 0 ) {
+	    print  "Source file has subtitle tracks \n";
+	    printf  "Track numbers %s\n", join (',',@sub_list);
+	    for (my $i = 0; $i < @sub_list; $i++) {
+		print  "extract subtitle track " . $sub_list[$i] . "\n";
+		my $subname = $inputfile . "_sid" . $sub_list[$i];
+		if ( $codec_list[$i] =~ /S_VOBSUB/) {
+		    $subfilename= $subname . ".vobsub";
+		    $subformat = "vobsub";
+		    $subexts[$i] = ".idx";
+		} elsif ($codec_list[$i] =~ /S_HDMV/) {
+		    $subfilename = $subname;
+		    $subformat = "SUP";
+		    $subexts[$i] = ".sup";
+		} elsif ($codec_list[$i] =~ m!S_TEXT!) {
+		    $subfilename = $subname;
+		    $subformat = "Text";
+		    $subexts[$i] = ".srt";
+		} else {
+		    print  "format not found, skipping\n";
+		    next;
+		}
+		print  "subtitle has format " . $subformat . "\n";
+		print  "exporting to file " . $subfilename . "\n";
+
+		if ( $subformat eq "vobsub" ) {
+		    if ( -f $subname . ".vobsub.sub" ) {
+			unlink $subname . ".vobsub.sub";
+		    }
+		    if ( -f $subname . ".vobsub.idx" ) {
+			unlink $subname . ".vobsub.idx";
+		    }
+		}
+		if ( $subformat eq "sup" ) {
+		    if ( -f $subname . ".sup" ) {
+			unlink $subname . ".sup";
+		    }
+		    if ($opt->{convertsup} eq "yes") {
+			if ( -f $subname . ".vobsub.sub" ) {
+			    unlink $subname . ".vobsub.sub";
+			}
+			if ( -f $subname . ".vobsub.idx" ) {
+			    unlink $subname . ".vobsub.idx";
+			}
+		    }
+		}
+		elsif ( $subformat eq "text" ) {
+		    if ( -f $subname . ".srt" ) {
+			unlink $subname . ".srt";
+		    }   
+		}
+		if ($subformat eq "vobsub") {
+		    $streams[$i] = sprintf "%s:%s/%s", $sub_list[$i], $workdir, $subfilename;
+		} else {
+		    $streams[$i] = sprintf "%s:%s/%s", $sub_list[$i], $workdir, $subfilename . $subexts[$i];
+		}
+		$subfiles[$i] = $subfilename;
+	    }
+	    my $command = sprintf "%s tracks \"%s\" %s", $progs->{mkvextract}, $inputfile, join (' ', @streams);
+	    print STDERR $command . "\n" if $opt->{debug};
+	    print $LOG $command . "\n";
+	    system ($command);
+	    unless ($? == -1) {
+		print STDERR "extraction of subtitles has succeeded\n"; 
+	    }
+	}
+    }
+    elsif ($opt->{file_type} eq "MPEG Transport Stream") {
+	my @tsMuxeR_info = `$progs->{tsMuxeR} $inputfile`;
+	my $tid;
+	my $type;
+	my $lang;
+	foreach (@tsMuxeR_info) {
+	    if (m/^\s*Track ID:\s+(\d+)/) {
+		$tid = $1;
+		chomp $tid;
+	    }
+	    elsif (m/^\s*Stream\s+type:\s+PGS/) {
+		push @sub_list, $tid;
+	    }
+	    elsif (m/^\s*Stream\s+ID:\s+(.+)/) {
+		if (@sub_list > @codec_list) {
+		    $type = $1;
+		    chomp $type;
+		    push @codec_list, $type;
+		}
+	    }
+	    elsif (m/^\s*Stream\s+lang:\s+(\w+)/) {
+		if (@sub_list > @lang_list) {
+		    $lang = $1;
+		    chomp $lang;
+		    push @lang_list, $lang;
+		}
+	    }
+	    elsif (m/^\s*Stream\s+type:\s+.*/) {
+		$tid = undef;
+		$type = undef;
+		$lang = undef;
+	    } 
+	}
+	my $basedir = cwd();
+	chdir $workdir;
+	$workdir = cwd();
+	chdir $basedir;
+	my $subtitlemetafile = $workdir . "/" . $inputfile . '_sub.meta' ;
+	my $tsMuxeR_inputfile = $basedir . "/" . $inputfile;
+	open my $SUB, '>', $subtitlemetafile or die "Unable to open $subtitlemetafile:$!\n";
+	# export Subtitles using tsMuxeR
+	print ($SUB "MUXOPT --no-pcr-on-video-pid --new-audio-pes --demux --vbr  --vbv-len=500\n");
+	for (my $i = 0 ; $i < @sub_list; $i++) {
+	    printf $SUB "%s, %s,bottom-offset=24,font-border=2,text-align=center,video-width=%s,video-height=%s,fps=%s, track=%s, lang=%s\n",
+	    $codec_list[$i],
+	    $tsMuxeR_inputfile,
+	    $opt->{targetwidth},
+	    $opt->{targetheight},
+	    $opt->{SRC_FPS},
+	    $sub_list[$i],
+	    $lang_list[$i]; 
+	    my $subext; 
+	    if ($codec_list[$i] =~ /PGS/) {
+		$subformat = "SUP";
+		$subexts[$i] = ".sup";
+	    }
+	    my ($filebase, $path, $extension) = fileparse($tsMuxeR_inputfile,qr{\..*});
+	    my $subfile = sprintf "%s.track_%s", $filebase, $sub_list[$i];
+	    push @subfiles, $subfile;
+	}
+	close ($SUB);
+	system ($progs->{tsMuxeR}, $subtitlemetafile, '.');
+	my @substring; 
+	for (my $i = 0 ; $i < @sub_list; $i++) {
+	    move ($basedir . "/" . $subfiles[$i] . $subexts[$i], $workdir);
+	    $substring[$i]  = $subfiles[$i] . $subexts[$i] . ":" . $lang_list[$i];
+	    $streams[$i] = sprintf "%s:%s/%s", $sub_list[$i], $workdir, $subfiles[$i] . $subexts[$i];
+	}
+	if ( @substring ) {
+	    $opt->{subtitles} = join (',', @substring);
+	}      
+    }
+    elsif ($opt->{file_type} eq "MP4/3GP/3G2 ISO Media") {
+
+    }
+    elsif ($opt->{file_type} eq "OGM video") {
+
+    }
+    for (my $i = 0; $i < @sub_list; $i++) {
+	my $langcode = $lang_list[$i];
+	unless ( $langcode ) {
+	    $langcode="und";
+	}
+	# subtitle conversions
+	# for the moment only BD Sup to DVD VobSUB is supported
+	print "subtitle format is $subformat\n" if $opt->{debug};
+	print "convert_sup is $opt->{convert_sup}\n" if $opt->{debug};
+	if (($subformat eq "SUP") && ($opt->{convert_sup} eq "yes")) {
+	    my $newname = &convert_sup_to_sub ($LOG, $opt, $progs, $subfiles[$i] . ".sup", $subfiles[$i] . ".idx", $subformat, "sub", 
+		$langcode, $opt->{targetheight}, $opt->{FPS}, $workdir);
+	    $subexts[$i] = ".idx";
+	}
+	# prepare track for merging
+	if ( $mkvmerge_subtitle_list eq "" ) {
+	    $mkvmerge_subtitle_list = $subfiles[$i] . $subexts[$i] . ':' . $langcode;
+	} else {
+	    $mkvmerge_subtitle_list=$mkvmerge_subtitle_list . "," . $subfiles[$i] . $subexts[$i] . ':' . $langcode;
+	}
+    }
+    if ( $mkvmerge_subtitle_list ) {
+	$opt->{subtitles} = "-S $mkvmerge_subtitle_list";
+    }
+}
+
+sub check_temporary_directory ()
+{
+    my $opt = shift; 
+    my $moviebase = shift; 
+
+    if ( $opt->{TMPDIR} ) {
+	if ( -d "$opt->{TMPDIR}") {
+#	    $opt->{TMP} = $opt->{TMPDIR} . "/tmpdir" . $opt->{moviebase};
+            $opt->{TMP} = catfile($opt->{TMPDIR}, 'tmpdir_' . $opt->{moviebase});
+	} else {
+#	    $opt->{TMP} = "tmpdir_" . $moviebase;
+            $opt->{TMP} = catfile(curdir(), 'tmpdir_' . $opt->{moviebase});
+	}
+    } else {
+#	$opt->{TMP} = "tmpdir_" . $moviebase;
+        $opt->{TMP} = catfile(curdir(), 'tmpdir_' . $opt->{moviebase});
+    }   
+    print STDERR "using temporary directory " . $opt->{TMP} . "\n" if $opt->{debug}; 
+    if ( -d "$opt->{TMP}"  ) {
+	# cleaning existing directory       
+	my $path = cwd ();
+	chdir "$opt->{TMP}"; 
+	opendir(IMD, cwd () ) || die("Cannot open directory"); 
+	my @thefiles = readdir(IMD);
+	closedir (IMD);
+	foreach ( @thefiles) {
+	    next if (($_ eq ".") || ($_ eq ".."));
+	    unlink $_;
+	}
+	chdir $path;
+    } else {
+	# creating nonexistant directory
+	#mkdir "$opt->{TMP}";
+	mkpath "$opt->{TMP}";
+    }
+}
+
+sub exec_external_prog () 
+{
+    my $LOG = shift; 
+    my $command = shift;
+    my $opt = shift;  
+    
+    print $LOG $command . "\n";
+    #           system ($ENCODE);
+    my @ret = `$command`;
+    if ($opt->{debug}) {
+        foreach (@ret) {
+            print STDERR $_;
+	}
+    }
+#    print STDERR Dumper @ret if ($opt->{debug});
+    return \@ret; 
+}
+
+##########################################################################################################
+# Configuration file handling                                                                            #
+##########################################################################################################
+sub find_executables ()
+{
+    my $program = shift;
+    my $fullpath = "unknown_path";
+    foreach (@PATH) {
+	my $test = sprintf "%s/%s", $_, $program;
+	if (-f $test) {
+	    return $test;
+	}
+    }
+    return $fullpath;         
+}
+
+sub check_config ()
+{
+    my $configpath;
+    my $configfile;
+    if ($os =~ m/MSWin.*/) {
+	$configpath = "c:/fangorn";
+    } else {
+	my $username = getlogin || getpwuid($<) || "fangorn";
+	$configpath = &catdir ("/home" , $username ,".fangorn");
+    }
+    mkdir $configpath unless (-d $configpath);
+    
+#   print STDERR "config path is $configpath\n";
+    $configfile = &catfile ($configpath , "config");
+    if (-f $configfile) {
+	return $configfile; 
+    } else {
+	&write_config ($configpath, $configfile);
+	return "";
+    }
+}
+
+sub write_config ()
+{
+    my $configpath = shift;
+    my $configfile = shift;
+    my $progs_linux = {
+	"bluray-info" => "bluray-info",
+	"avi2mkv"    => "avi2mkv",
+	"choose_video_parameters" => "choose_video_parameters",
+	"mplayer"    => "mplayer",
+	"mencoder"   => "mencoder",
+	"ffmpeg"     => "ffmpeg",
+	"mkvextract" => "mkvextract",
+	"mkvmerge"   => "mkvmerge",
+	"mkvinfo"    => "mkvinfo",
+	"ogmmerge"   => "ogmmerge",
+	"avimerge"   => "avimerge",
+	"mediainfo"  => "mediainfo",
+	"MP4Box"     => "MP4Box",
+	"tsMuxeR"    => "tsMuxeR",
+	"oggenc"     => "oggenc",
+	"flac"       => "flac",
+	"neroaacenc" => "neroAacEnc",
+	"java"       => "java",
+	"BDSup2Sub"  => "BDSup2Sub.jar",
+    };
+    my $progs_windows = {
+	"bluray-info" => "bluray-info.pl",
+	"avi2mkv"    => "avi2mkv.pl",
+	"choose_video_parameters" => "choose_video_parameters.pl",
+	"mplayer"    => "mplayer.exe",
+	"mencoder"   => "mencoder.exe",
+	"ffmpeg"     => "ffmpeg.exe",
+	"mkvextract" => "mkvextract.exe",
+	"mkvmerge"   => "mkvmerge.exe",
+	"mkvinfo"    => "mkvinfo.exe",
+	"ogmmerge"   => "ogmmerge.exe",
+	"avimerge"   => "avimerge.exe",
+	"mediainfo"  => "MediaInfo.exe",
+	"MP4Box"     => "MP4Box.exe",
+	"tsMuxeR"    => "tsMuxeR.exe",
+	"eac3to"     => "eac3to.exe",
+	"java"       => "java",
+	"BDSup2Sub"  => "BDSup2Sub.jar",
+    };
+    unless ($os =~ m/MSWin/) {
+	# seeking executables in $PATH
+	foreach (keys(%{$progs_linux})) {
+	    $progs_linux->{$_} = &find_executables ($progs_linux->{$_});
+	    printf STDERR "program $_ has the path $progs_linux->{$_}\n";
+	}
+    } else {
+	# for windows this is not as simple as executables are scattered all around the filesystem
+	# The user has to set this by hand
+	#
+        # or (for expert users) set all the necessary paths in 
+        # HKEY_LOCAL_MACHINE\ SYSTEM\ CurrentControlSet\ Control\ Session Manager\ Environment
+	# with regedit  to something like this (include all the paths to your installation directories)
+	# PATH to "%SystemRoot%\system32;%SystemRoot%;%SystemRoot%\System32\Wbem;%SYSTEMROOT%\System32\WindowsPowerShell\v1.0\;C:\fangorn;C:\Program Files\MKVtoolnix;C:\strawberry\c\bin;C:\strawberry\perl\bin;%SystemRoot%\Program Files\megui\tools\ffmpeg;%SystemRoot%\Programme\megui\tools\mencoder;%SystemRoot%\Programme\megui\tools\mp4box;%SystemRoot%\Programme\megui\tools\eac3to;%SystemRoot%\Programme\megui\tools\txmuxer"
+	# PATHEXT add ";.PL"
+	# and after a reboot uncomment the following lines then most programs should be found
+	#foreach (keys(%{$progs_windows})) {
+	#   $progs_windows->{$_} = &find_executables ($progs_windows->{$_});
+	#}
+    }
+    mkdir ($configpath) unless (-d $configpath);
+    open my $CONF, '>', $configfile or die "could not open config file $configfile for writing\n";
+    print $CONF <<EOF;
+# Configuration file for script collection created by fangorn
+# This file is used to configure menc, riptoh264, blu2mkv, avi2mkv, bluray-info
+
+# project page: http://fangornsrealm.eu
+
+######################
+# Language settings: #
+######################
+# Define what languages you would prefer to have in the resulting movie files.
+# If they are present in the source file(s) they are used.
+# You can specify as many as you like, default are german and english.
+# (the order in which you specify them is reflected in the resulting movie file
+# unless you demand otherwise)
+language = ger
+language = eng
+
+
+EOF
+    unless ($os =~ m/MSWin/) {
+	print $CONF "#######################################################################################################################\n"; 
+	print $CONF "# Program paths:                                                                                                      #\n";
+	print $CONF "# Set this to the correct paths. Not all scripts need all programs. Dependencies are listed in the respective script. #\n";
+	print $CONF "#######################################################################################################################\n";
+	print $CONF "\n";  
+	print $CONF "# My own Toolbox\n";
+	printf $CONF "bluray-info             = %s\n", $progs_linux->{"bluray-info"};
+	printf $CONF "avi2mkv                 = %s\n", $progs_linux->{"avi2mkv"};
+	printf $CONF "choose_video_parameters = %s\n", $progs_linux->{"choose_video_parameters"};
+	print $CONF "\n";  
+	print $CONF "# Mplayer/Mencoder (http://www.mplayerhq.hu)\n";
+	printf $CONF "mplayer                 = %s\n", $progs_linux->{"mplayer"};
+	printf $CONF "mencoder                = %s\n", $progs_linux->{"mencoder"};
+	print $CONF "\n";
+	print $CONF "# FFMpeg (http://ffmpeg.org/download.html) (windows version http://sourceforge.net/projects/mplayer-win32/files/)\n";
+	printf $CONF "ffmpeg                  = %s\n", $progs_linux->{"ffmpeg"};
+	print $CONF "\n";
+	print $CONF "# MKVToolnix (http://www.bunkus.org/)\n";
+	printf $CONF "mkvextract              = %s\n", $progs_linux->{"mkvextract"};
+	printf $CONF "mkvmerge                = %s\n", $progs_linux->{"mkvmerge"};
+	printf $CONF "mkvinfo                 = %s\n", $progs_linux->{"mkvinfo"};
+	print $CONF "\n";
+	print $CONF "# OGMTools (http://www.bunkus.org/videotools/ogmtools/)\n";
+	printf $CONF "ogmmerge                = %s\n", $progs_linux->{"ogmmerge"};
+	print $CONF "\n";
+	print $CONF "# Mediainfo CLI (http://mediainfo.sourceforge.net/)\n";
+	printf $CONF "mediainfo               = %s\n", $progs_linux->{"mediainfo"};
+	print $CONF "\n";
+	print $CONF "# GPAC (http://gpac.sourceforge.net)\n";
+	printf $CONF "MP4Box                  = %s\n", $progs_linux->{"MP4Box"};
+	print $CONF "\n";
+	print $CONF "# tsMuxeR (http://www.smlabs.net/tsmuxer_en.html)\n";
+	printf $CONF "tsMuxeR                 = %s\n", $progs_linux->{"tsMuxeR"};
+	print $CONF "\n";
+	print $CONF "# OggEnc (http://www.vorbis.com/setup/)\n";
+	printf $CONF "oggenc                  = %s\n", $progs_linux->{"oggenc"};
+	print $CONF "\n";
+	print $CONF "# FLAC (http://flac.sourceforge.net/download.html)\n";
+	printf $CONF "flac                    = %s\n", $progs_linux->{"flac"};
+	print $CONF "\n";
+	print $CONF "# NeroAACEnc (http://www.nero.com/eng/downloads-nerodigital-nero-aac-codec.php)\n";
+	printf $CONF "neroaacenc              = %s\n", $progs_linux->{"neroaacenc"};
+	print $CONF "\n";
+	print $CONF "# path to java executable (http://www.java.com/en/download/manual.jsp)\n";
+	printf $CONF "java                    = %s\n", $progs_linux->{"java"};
+	print $CONF "\n";
+	print $CONF "# BDSup2Sub executable container (http://forum.doom9.org/showthread.php?t=145277)\n";
+	printf $CONF "BDSup2Sub               = %s\n", $progs_linux->{"BDSup2Sub"};
+	print $CONF "\n"; 
+	print $CONF "\n"; 
+	print $CONF "\n"; 
+    } else {
+	if (-f $progs_windows->{"bluray-info"}){
+	    print $CONF "#######################################################################################################################\n"; 
+	    print $CONF "# Program paths:                                                                                                      #\n";
+	    print $CONF "# Set this to the correct paths. Not all scripts need all programs. Dependencies are listed in the respective script. #\n";
+	    print $CONF "#######################################################################################################################\n";
+	    print $CONF "\n";  
+	    print $CONF "# My own Toolbox\n";
+	    printf $CONF "bluray-info             = %s\n", $progs_windows->{"bluray-info"};
+	    printf $CONF "avi2mkv                 = %s\n", $progs_windows->{"avi2mkv"};
+	    printf $CONF "choose_video_parameters = %s\n", $progs_windows->{"choose_video_parameters"};
+	    print $CONF "\n";  
+	    print $CONF "# Mplayer/Mencoder (http://www.mplayerhq.hu)\n";
+	    printf $CONF "mplayer                 = %s\n", $progs_windows->{"mplayer"};
+	    printf $CONF "mencoder                = %s\n", $progs_windows->{"mencoder"};
+	    print $CONF "\n";
+	    print $CONF "# FFMpeg (http://ffmpeg.org/download.html) (windows version http://sourceforge.net/projects/mplayer-win32/files/)\n";
+	    printf $CONF "ffmpeg                  = %s\n", $progs_windows->{"ffmpeg"};
+	    print $CONF "\n";
+	    print $CONF "# MKVToolnix (http://www.bunkus.org/)\n";
+	    printf $CONF "mkvextract              = %s\n", $progs_windows->{"mkvextract"};
+	    printf $CONF "mkvmerge                = %s\n", $progs_windows->{"mkvmerge"};
+	    printf $CONF "mkvinfo                 = %s\n", $progs_windows->{"mkvinfo"};
+	    print $CONF "\n";
+	    print $CONF "# OGMTools (http://www.bunkus.org/videotools/ogmtools/)\n";
+	    printf $CONF "ogmmerge                = %s\n", $progs_windows->{"ogmmerge"};
+	    print $CONF "\n";
+	    print $CONF "# Mediainfo CLI (http://mediainfo.sourceforge.net/)\n";
+	    printf $CONF "mediainfo               = %s\n", $progs_windows->{"mediainfo"};
+	    print $CONF "\n";
+	    print $CONF "# GPAC (http://gpac.sourceforge.net)\n";
+	    printf $CONF "MP4Box                  = %s\n", $progs_windows->{"MP4Box"};
+	    print $CONF "\n";
+	    print $CONF "# tsMuxeR (http://www.smlabs.net/tsmuxer_en.html)\n";
+	    printf $CONF "tsMuxeR                 = %s\n", $progs_windows->{"tsMuxeR"};
+	    print $CONF "\n";
+	    print $CONF "# eac3to\n";
+	    printf $CONF "eac3to                  = %s\n", $progs_windows->{"eac3to"};
+	    print $CONF "\n";
+	    print $CONF "# path to java executable\n";
+	    printf $CONF "java                    = %s\n", $progs_windows->{"java"};
+	    print $CONF "\n";
+	    print $CONF "# BDSup2Sub executable container\n";
+	    printf $CONF "BDSup2Sub               = %s\n", $progs_windows->{"BDSup2Sub.jar"};
+	    print $CONF "\n"; 
+	    print $CONF "\n"; 
+	    print $CONF "\n"; 
+	} else {
+	    print $CONF <<EOF;
+####################################################################################################################### 
+# Program paths:                                                                                                      #
+# Set this to the correct paths. Not all scripts need all programs. Dependencies are listed in the respective script. #
+#######################################################################################################################
+
+# My own Toolbox
+bluray-info = c:/fangorn/bluray-info
+avi2mkv    = c:/fangorn/avi2mkv
+choose_video_parameters = c:/fangorn/choose_video_parameters
+
+# Mplayer/Mencoder (http://www.mplayerhq.hu)
+mplayer    = "c:/Program Files/MPlayer/mplayer.exe"
+mencoder   = "c:/Program Files/MPlayer/mencoder.exe"
+
+# FFMpeg (http://ffmpeg.org/download.html) (windows version http://sourceforge.net/projects/mplayer-win32/files/)
+ffmpeg     = "c:/Program Files/MeGUI/Tools/ffmpeg/ffmpeg.exe"
+
+# MKVToolnix (http://www.bunkus.org/)
+mkvextract = "c:/Program Files/MKVToolnix/mkvextract.exe"
+mkvmerge   = "c:/Program Files/MKVToolnix/mkvmerge.exe"
+mkvinfo    = "c:/Program Files/MKVToolnix/mkvinfo.exe"
+
+# OGMTools (http://www.bunkus.org/videotools/ogmtools/)
+ogmmerge   = 
+
+# Mediainfo CLI (http://mediainfo.sourceforge.net/)
+mediainfo  = "c:/Program Files/MediaInfo/MediaInfo.exe"
+
+# GPAC (http://gpac.sourceforge.net)
+MP4Box     = "c:/Program Files/MeGUI/Tools/mp4box/MP4Box.exe"
+
+# tsMuxeR (http://www.smlabs.net/tsmuxer_en.html)
+tsMuxeR    = "c:/Program Files/MeGUI/Tools/tsmuxer/tsMuxeR.exe"
+
+# eac3to 
+eac3to     = "c:/Program Files/MeGUI/Tools/eac3to/eac3to.exe"
+
+# path to java executable
+java       = "c:/Program Files/java/jre6/bin/java.exe" 
+
+# BDSup2Sub executable container
+BDSup2Sub  = c:/fangorn/BDSup2Sub.jar
+
+
+EOF
+	}
+    }
+    print $CONF <<EOF;
+###################### 
+# Script parameters: #
+###################### 
+
+###################################
+# Common:  (used in most scripts) #
+###################################
+EOF
+
+foreach (@$global_parameters) {
+    &set_config_defaultvalue ($_, $configfile, $CONF);
+}
+
+    print $CONF <<EOF;
+
+################
+# bluray-info: #
+################ 
+EOF
+
+  foreach (@$bluray_info_parameters) {
+      &set_config_defaultvalue ($_, $configfile, $CONF);
+  }
+     print $CONF <<EOF;
+
+############ 
+# avi2mkv: #
+############
+EOF
+    foreach (@$avi2mkv_parameters) {
+        &set_config_defaultvalue ($_, $configfile, $CONF);
+    }
+
+    print $CONF <<EOF;
+
+############ 
+# blu2mkv: #
+############
+EOF
+    foreach (@$blu2mkv_parameters) {
+        &set_config_defaultvalue ($_, $configfile, $CONF);
+    }
+
+    print $CONF <<EOF;
+
+##############
+# riptoh264: #
+##############
+EOF
+    foreach (@$riptoh264_parameters) {
+        &set_config_defaultvalue ($_, $configfile, $CONF);
+    }
+
+    print $CONF <<EOF;
+
+##############
+# menc:      #
+##############
+EOF
+    foreach (@$menc_parameters) {
+        &set_config_defaultvalue ($_, $configfile, $CONF);
+    }
+
+    close ($CONF);
+    return $configfile;
+}
+
+sub set_config_defaultvalue () {
+    my $token = shift; 
+    my $configfile = shift; 
+    my $CONF = shift; 
+    
+#    print STDERR "token to lookup in config file: $token\n"; 
+#    print STDERR "config file: $configfile\n"; 
+    return unless ($token);
+    unless ($CONF) {
+        # open config file for writing
+        open $CONF, '>>', $configfile or die "could not open config file $configfile for writing\n";
+    
+    }
+    print $CONF "\n";
+    unless ($config_default_values->{$token}) {
+        print STDERR "no default value for missing config file entry $token available!\n";
+        return;
+    } 
+    print $CONF $config_default_comments->{$token}  . "\n";
+    print $CONF $config_default_values->{$token}  . "\n";
+    
+
+}
+
+sub grep_config_value ($\@$)
+{
+    my $token = shift;
+    my @array = @{(shift)};
+    my $value = "";
+    my $configfile = shift; 
+
+#    print STDERR "grabbing setting for token $token from file $configfile\n";
+    my $regex = qr/\s*$token\s*=\s*(.*)/;
+    my $temp;
+    ($temp) = grep (s!$regex!$1!, @array);
+    if ($temp) {
+	chomp ($temp);
+	return $temp;
+    } else {
+        &set_config_defaultvalue ($token, $configfile) unless ((defined ($temp)) or not ($token));
+	return "";
+    }
+}
+
+sub read_config ()
+{
+    my $configfile = shift;
+    my $languages = shift;
+    my $progs = shift;
+    my $programlist;
+    if ($os =~ m/MSWin/) {
+       $programlist = ["bluray-info", "avi2mkv", "mediainfo",
+	   "choose_video_parameters" , "mplayer" , "mencoder" , 
+	   "ffmpeg" , "mkvextract" , "mkvmerge" , "mkvinfo" , 
+	   "MP4Box" , "tsMuxeR" , "eac3to" , 
+	   "java" , "BDSup2Sub"];
+    } else {
+       $programlist = ["bluray-info", "avi2mkv", "mediainfo",
+	   "choose_video_parameters" , "mplayer" , "mencoder" , 
+	   "ffmpeg" , "mkvextract" , "mkvmerge" , "mkvinfo" , 
+	   "ogmmerge" , "MP4Box" , "tsMuxeR" , 
+	   "oggenc" , "flac" , "neroaacenc" , 
+	   "java" , "BDSup2Sub"];
+    }
+
+    open my $CONF, '<', $configfile or die "could not open config file $configfile for reading\n";
+    my @config = <$CONF>;
+    my @lang = grep (s/\s*language\s*=\s*(\w{3})/$1/g, @config);
+    for (my $i = 0; $i < @lang; $i++) {
+	chomp ($lang[$i]);
+    }
+    if (@lang) {
+	# drop predefined languages 
+	for (my $count = 0; $count < @$languages; $count++) {
+	    delete ($languages->[$count]);
+	}
+	push @$languages, @lang;
+    }
+    my $temp;
+    foreach (@$programlist) {
+	$temp = &grep_config_value ($_, \@config, $configfile);
+#        print STDERR "config token is $_ and value is $temp\n";
+        if ($temp) {
+	    $progs->{$_} = $temp;
+ #           print STDERR "value $_ is set to $opt->{$_}\n";
+        }
+    }
+}
+
+
+
+
+1;
+# vim: set shiftwidth=4 tabstop=8 softtabstop=4 noexpandtab nosmarttab

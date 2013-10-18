@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+STATUS_DIR := /var/lib/doc-base/info
+LOCAL_DIR := /usr/local/doc
+CONTROL_DIR := /usr/share/doc-base
+DOCS := $(basename $(notdir $(wildcard $(LOCAL_DIR)/*.doc-base)))
+STATUS_FILES := $(addprefix $(STATUS_DIR)/,$(addsuffix .status,$(DOCS)))
+CONTROL_FILES := $(addprefix $(CONTROL_DIR)/,$(DOCS))
+
+$(STATUS_DIR)/%.status:	$(LOCAL_DIR)/%.doc-base
+	install-docs -i $<
+	
+$(CONTROL_DIR)/%: $(LOCAL_DIR)/%.doc-base
+	ln -s $< $@
+
+all:	$(STATUS_FILES) $(CONTROL_FILES)
+	dwww-build-menu
+
+.PHONY: all

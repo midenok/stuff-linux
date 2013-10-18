@@ -1,0 +1,918 @@
+#!/usr/bin/perl
+package Options;
+use strict;
+use UNIVERSAL qw(isa);
+use Carp;
+use Getopt::Long qw(GetOptionsFromArray :config bundling);
+
+Getopt::Long::Configure(qw(
+    permute
+    pass_through
+));
+
+my %DEFAULTS = (
+    build_method => 'deb-pkg',
+    share_dir => '/usr/local/share/kernel-package'
+);
+
+my %OPTIONS = (
+    # Format:
+    # name          => ['aliases', 'type', 'description', 'dashed_variant'(generated)]
+    src_dir         => ['s', '=s', "Directory for Git source tree"],
+    build_dir       => ['',  '=s', "Directory where kernel is built"],
+    share_dir       => ['',  '=s', "Defaults to $DEFAULTS{share_dir}"],
+    branch_prefix   => ['p', '=s', "Prefix for branch names"],
+    version         => ['V', '=s', "Git version to derive branch from: master, last_stable or version tag."],
+    checkout        => ['',  '',  "Clone initial git repository from git.kernel.org"],
+    # TODO: update-since feature
+    update          => ['u', '!',  "Pull master branch from remote repository"],
+    verbose         => ['v', '',  "Verbose operation"],
+    merge_tuxonice  => ['',  '',  "Merge with tuxonice branch"],
+    update_tuxonice => ['t',  '!',  "Pull tuxonice branch from remote repository"],
+    merge_branch    => ['',  '=s@', "Merge with custom branch"],
+    kernel_config   => ['C', '=s', "Kernel config file"],
+    track_config    => ['',  '!',  "Use branch to track kernel config"],
+    config_mode     => ['m',  '=s', "Kernel config command; may be 'auto', 'skip' or any kernel config target (oldconfig, menuconfig, etc.)"],
+    interactive     => ['',  '',  "Same as --config-mode=oldconfig"],
+    build           => ['b',  '!',  "Build kernel package"],
+    build_only      => ['B',  '!',  "Implies --build; skip branches updating and merging, just build"],
+    build_method    => ['',  '=s', "Method of building package: 'deb-pkg' (default) or 'kpkg'"],
+    package_only    => ['P',  '!',  "Implies --build; if --build-method=kpkg skip kernel building, just build .deb package"],
+    jobs            => ['j', '=i', "Build kernel with parallel jobs"],
+    make_flags      => ['',  '=s', "Build kernel custom make flags"],
+    arch            => ['kernel-architecture', '=s', "Kernel architecture (as in ARCH variable)"],
+    deb_arch        => ['debian-architecture', '=s', "Architecture of built .deb package (as in DEB_HOST_ARCH)"],
+    config_file     => ['c', '=s', "Script configuration file"],
+    all             => ['a', '!',  "Process all sections from configuration file"],
+    dump_config     => ['D', '',  "Don't execute anything, dump configuration"]
+);
+
+use constant {
+    ALIASES     => 0,
+    TYPE        => 1,
+    DESCRIPTION => 2,
+    DASHED      => 3
+};
+
+my %VALID_BUILD_METHODS = (
+    'deb-pkg' => 1,
+    'kpkg' => 1,
+    'ubuntu' => 1
+);
+
+my %DEBIAN_ARCHITECTURES = (
+    x86_64 => 'amd64'
+);
+
+my @GETOPT_OPTS = map {
+    my $specifier = $_;
+
+    if (m/_/) {
+        my $dashed = $_;
+        $dashed =~ s/_/-/g;
+        $specifier .= "|${dashed}";
+        push @{$OPTIONS{$_}}, $dashed;
+    }
+
+    my $aliases = $OPTIONS{$_}->[ALIASES];
+    $specifier .= "|${aliases}"
+        if $aliases;
+
+    $specifier .= $OPTIONS{$_}->[TYPE];
+
+    $specifier
+} keys %OPTIONS;
+
+sub new
+{
+    my $class = shift;
+    $class = (ref $class || $class);
+    my $self = bless {
+        options => shift || {},
+    } => $class;
+    return $self;
+}
+
+sub get
+{
+    my $self = shift;
+    my $o = shift;
+    return exists $self->{options}->{$o} ? $self->{options}->{$o} : undef;
+}
+
+sub set
+{
+    my $self = shift;
+    my $o = shift;
+    my $val = defined $_[0] ? shift : 1;
+    return $self->{options}->{$o} = $val;
+}
+
+sub obj_or_hash
+{
+    my $x = $_[0];
+    return defined $x ? isa($x, __PACKAGE__) ? $x->{options} : $x : {};
+}
+
+sub from_array
+{
+    my $class = shift;
+    my $array = shift;
+    my $options = {};
+    GetOptionsFromArray($array, $options, @GETOPT_OPTS);
+    return $class->new($options);
+}
+
+sub from_argv
+{
+    my $class = shift;
+    my $options = {};
+    GetOptions($options, @GETOPT_OPTS);
+    return $class->new($options);
+}
+
+sub put_override
+{
+    my $self = shift;
+    my $override = obj_or_hash(shift);
+    for my $o (keys %$override) {
+        $self->{options}->{$o} = $override->{$o};
+    }
+}
+
+sub put_defaults
+{
+    my $self = shift;
+    my $defaults = obj_or_hash(shift);
+    for my $o (keys %$defaults) {
+        $self->{options}->{$o} = $defaults->{$o}
+            unless exists $self->{options}->{$o};
+    }
+}
+
+sub validate
+{
+    my $self = shift;
+    my $section_name = shift;
+
+    $self->put_defaults(\%DEFAULTS);
+
+    my $opts = $self->{options};
+
+    if (!exists $opts->{dump_config}) {
+        die "Wrong value '$opts->{build_method}' for --build-method"
+            unless exists $VALID_BUILD_METHODS{$opts->{build_method}};
+    }
+
+    $opts->{build_only} = 1
+        if exists $opts->{package_only};
+    $opts->{build} = 1
+        if exists $opts->{build_only};
+
+    if (! exists $opts->{config_mode}) {
+        if (exists $opts->{build}) {
+            $opts->{config_mode} = 'auto';
+        }
+    }
+
+    if (exists $opts->{arch} && !exists $opts->{deb_arch}
+        && exists $DEBIAN_ARCHITECTURES{$opts->{arch}})
+    {
+        $opts->{deb_arch} = $DEBIAN_ARCHITECTURES{$opts->{arch}};
+    }
+
+    if (!exists $opts->{branch_prefix} && defined $section_name) {
+        $opts->{branch_prefix} = $section_name;
+    }
+}
+
+sub require
+{
+    my $self = shift;
+    my $o = shift;
+    my $message = shift;
+
+    if (! exists $self->{options}->{$o}) {
+        print STDERR $message, "\n"
+            if defined $message;
+        confess "Required option missed: --". $OPTIONS{$o}->[DASHED]. "\n";
+    }
+    return $self->{options}->{$o};
+}
+
+1;
+
+
+package Config;
+use strict;
+use Carp;
+use Text::ParseWords;
+use Data::Dumper;
+
+sub parse
+{
+    my $filename = shift;
+    my $result = {};
+    open FILE, $filename;
+    my $section = '_'; # global section name
+    my $line = 0;
+    while (<FILE>) {
+        ++$line;
+        # empty or comment lines
+        m/^\s*(#.*)?$/ && next;
+        # sections
+        m/^\s*\[(.+)\][[:space:]#]*$/ && do {
+            $section = $1;
+            next;
+        };
+        # setting lines
+        m/^\s*(\S.*[^[:space:]#])[[:space:]#]*$/ && do {
+            push @{$result->{$section}}, shellwords("--$1");
+            next;
+        };
+        die "Config parse failed ($filename:$line):\n$_\n";
+    }
+    return $result;
+}
+
+sub get_configuration
+{
+    my %result;
+    my $cmdline_opts = Options->from_argv();
+
+    $cmdline_opts->put_defaults({
+        exists $ENV{KERNEL_BUILD_CONFIG} ?
+            (config_file => $ENV{KERNEL_BUILD_CONFIG}) : ()
+    });
+
+    my $config_file = $cmdline_opts->get('config_file');
+    if (defined $config_file) {
+        my $config = parse($config_file);
+        my %process_sections;
+        for (my $i = 0; $i < @ARGV;) {
+            my $arg = $ARGV[$i];
+            if (exists $config->{$arg}) {
+                $process_sections{$arg} = 1;
+                splice @ARGV, $i, 1;
+                next;
+            }
+            ++$i;
+        }
+
+        if (@ARGV) {
+            die 'Unknown arguments: ', join(', ', @ARGV), "\n";
+        }
+
+        my $common_opts = Options->from_array($config->{_});
+
+        if (! keys %process_sections &&
+            (defined $cmdline_opts->get('all') || defined $common_opts->get('all')))
+        {
+            %process_sections = map { $_ => 1 } grep { $_ ne '_' } keys %$config;
+        }
+
+        for my $s (keys %process_sections) {
+            my $section_opts = Options->from_array($config->{$s});
+            $section_opts->put_override($cmdline_opts);
+            $section_opts->put_defaults($common_opts);
+            $section_opts->validate($s);
+            $result{$s} = $section_opts;
+        }
+        if (! keys %process_sections) {
+            # no sections on command-line, so process only common config
+            $common_opts->put_override($cmdline_opts);
+            $common_opts->validate();
+            $result{'_'} = $common_opts;
+        }
+    } else {
+        $cmdline_opts->validate();
+        $result{'_'} = $cmdline_opts;
+    }
+    # dump config
+    if ($cmdline_opts->get('dump_config')) {
+        print Dumper(\%result);
+        exit;
+    }
+    return \%result;
+}
+
+1;
+
+package KernelBuild;
+use strict;
+
+use IPC::Open3;
+use Symbol;
+use Cwd qw(abs_path getcwd);
+use Carp;
+use File::Copy;
+
+sub execute
+{
+    my $class = shift;
+    $class = (ref $class || $class);
+    my $self = bless {
+        options => shift
+    } => $class;
+    $self->execute_main;
+}
+
+sub get_system_status
+{
+    my $rc = shift;
+    if ($rc == -1) {
+        confess "Command failed: ", join(' ', @_), "\n";
+    }
+
+    if ($rc & 127) {
+        confess "Command died with signal " . ($rc & 127) .
+            (($rc & 128) ? ' (core dumped): ' : ': ') .
+            join(' ', @_), "\n";
+    }
+    return $rc >> 8;
+}
+
+sub check_system_rc
+{
+    my $status = get_system_status($_[0]);
+
+    return 1
+        if $status == 0;
+
+    die "Failed with status $status\n";
+}
+
+sub shell
+{
+    check_system_rc(system @_);
+}
+
+sub check_git_repository
+{
+    my $git_dir = shift;
+    -d $git_dir || return 0;
+    -d "${git_dir}/.git" && return 1;
+    die "No git repository at ${git_dir}";
+}
+
+sub execute_main
+{
+    my $self = shift;
+    my $o = $self->{options};
+
+    my $src_dir = $o->set('src_dir', abs_path($o->require('src_dir')));
+
+    if (!check_git_repository $src_dir) {
+        $self->require('checkout', "No source dir ${src_dir}");
+        $self->verbose_print("Performing checkout...");
+        shell "git clone git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-2.6-stable.git ${src_dir}";
+    } elsif (-f "${src_dir}/include/linux/Kbuild") {
+        die "No kernel sources at ${src_dir}";
+    }
+
+    my $work_dir = abs_path(getcwd);
+    my $kernel_config = $o->get('kernel_config');
+
+    if (defined $kernel_config) {
+        if (!-f $kernel_config) {
+            die "Config file '${kernel_config}' not exists!\n"
+        }
+        $o->set(kernel_config => abs_path($kernel_config));
+    }
+
+    croak_failed(chdir $src_dir);
+
+    $self->require_branches();
+
+    if (!$o->get('build_only') && $o->get('update')) {
+        $self->verbose_print("Updating master branch...");
+        $self->switch_branch('master');
+        shell "git pull --no-log --no-stat --quiet";
+    }
+
+    $self->require_sorted_tags();
+
+    # TODO: last_rc feature
+    if ($o->get('version') eq 'last_stable') {
+        my $version_tag = (
+            grep {m/^v\d+\.\d+\.\d+(\.\d+)?$/}
+            @{$self->{sorted_tags}}
+        )[-1];
+        $o->set('version', $version_tag);
+        $self->verbose_print("Last stable version: ", $version_tag);
+    } elsif ($o->get('version') eq 'master') {
+        $self->verbose_print('Using master branch (' . $self->{sorted_tags}->[-1] . ')');
+    }
+
+    if (!$o->get('build_only')) {
+        if ($o->get('update_tuxonice')) {
+            $self->pull_tuxonice();
+        }
+
+        if ($o->get('track_config')) {
+            $self->prepare_config_branch();
+        }
+
+        $self->prepare_main_branch();
+    }
+
+    if ($o->get('config_mode')) {
+        if (!$o->get('build_dir')) {
+            $o->set('build_dir', "${work_dir}/build-" . $o->require('branch_prefix'));
+        }
+        $self->configure_and_build();
+    }
+}
+
+############ Function declarations ##############
+
+sub verbose_print
+{
+    my $self = shift;
+    my $o = $self->{options};
+    if ($o->get('verbose')) {
+        print '[kernel-build] ', @_, "\n";
+    }
+}
+
+sub croak_failed
+{
+    if (!$_[0]) {
+        confess("Call failed");
+    }
+    return @_;
+}
+
+sub break_version
+{
+    $_[0] =~ /^(\d+)\.(\d+)\.(\d+)(\.(\d+))?(-rc(\d+))?$/
+        or confess "Unknown version format: $_[0]";
+    return ($1, $2, $3, defined $5 ? $5 : 0, defined $7 ? $7 : 999);
+}
+
+sub compare_versions
+{
+    my @a = break_version(shift);
+    my @b = break_version(shift);
+
+    for (my $i = 0; $i < 5; ++$i) {
+        my $res = $a[$i] <=> $b[$i];
+        return $res
+            if $res;
+    }
+    return 0;
+}
+
+sub require_sorted_tags
+{
+    my $self = shift;
+    $self->{sorted_tags} = [sort {
+        $a =~ /^v(.+)$/;
+        my $a1 = $1;
+        $b =~ /^v(.+)$/;
+        my $b1 = $1;
+        compare_versions($a1, $b1);
+    } grep {
+        m/^v\d+\.\d+\.\d+(\.\d+)?(-rc\d+)?$/
+    } git('tag')];
+}
+
+sub require_branches
+{
+    my $self = shift;
+
+    $self->{branches} = {};
+
+    for (git('branch')) {
+        m/^\*\s+(\S+)$/ && do {
+            $self->{current_branch} = $1;
+            $self->{branches}->{$1} = 1;
+            next;
+        };
+        m/^\s*(\S+)$/ && do {
+            $self->{branches}->{$1} = 1;
+            next;
+        };
+        m/^\*\s+\(no branch\)^\s*$/ && do {
+            next;
+        };
+        die "git branch parsing failed: $_\n";
+    }
+}
+
+sub require_version
+{
+    my $self = shift;
+    my $o = $self->{options};
+    my $version_tag = $o->require('version');
+
+    if (! defined $self->{main_version}) {
+        if ($version_tag eq 'master') {
+            $version_tag = $self->{sorted_tags}->[-1];
+        }
+        $version_tag =~ m/^v(\d+\.\d+\.\d+)(\..+)?$/;
+        # used for naming branches
+        $self->{main_version} = $1;
+        # used for comparing with config version
+        $self->{kernel_version} = $1 . $2;
+        # used for creation of branches
+        $self->{main_version_tag} = "v$1";
+        # TODO: check that $self->{main_version_tag} exists in git tags
+        $self->{tuxonice_branch} = "tuxonice-$1"
+    }
+}
+
+sub get_config_version
+{
+    my $file = shift;
+    open FILE, $file
+        or confess "$file: $!";
+
+    while (<FILE>) {
+        m/^# Linux kernel version: (\d+\.\d+\.\d+)(\..+)?$/
+            && return $1 . $2;
+    }
+    die "Not found version in config $file!\n";
+}
+
+
+sub require_config_branch()
+{
+    my $self = shift;
+    my $o = $self->{options};
+
+    if (! exists $self->{config_branch}) {
+        $self->{config_branch} = $o->require('branch_prefix') . "-config";
+    }
+    return $self->{config_branch};
+}
+
+sub require_main_branch()
+{
+    my $self = shift;
+    my $o = $self->{options};
+    $self->require_version();
+    $self->{main_branch} = $o->require('branch_prefix') . "-$self->{main_version}";
+}
+
+sub pull_tuxonice
+{
+    my $self = shift;
+
+    $self->require_version();
+
+    if (! exists $self->{branches}->{$self->{tuxonice_branch}}) {
+        $self->create_branch($self->{tuxonice_branch}, $self->{main_version_tag});
+    } else {
+        $self->switch_branch($self->{tuxonice_branch});
+    }
+    $self->verbose_print("Updating $self->{tuxonice_branch}...");
+    shell "git pull --no-log --no-stat --quiet git://git.kernel.org/pub/scm/linux/kernel/git/nigelc/tuxonice-$self->{main_version}.git";
+}
+
+sub prepare_config_branch
+{
+    my $self = shift;
+    my $o = $self->{options};
+
+    $self->require_version();
+    $self->require_config_branch();
+
+    my $kernel_config;
+    if (!check_git_repository $o->get('config_dir')) {
+    #if (! exists $self->{branches}->{$self->{config_branch}}) {
+        # create git repository
+        $kernel_config = $o->require('kernel_config',
+            "Config branch '$self->{config_branch}' not found and no option --kernel-config supplied!");
+        $self->create_branch($self->{config_branch}, $self->{main_version_tag});
+        $self->verbose_print("Adding config from ${kernel_config}...");
+        croak_failed(copy(${kernel_config}, "config"));
+        shell 'git add config';
+        shell 'git commit -q -m "Initial config"';
+    } elsif ($kernel_config = $o->get('kernel_config')) {
+        $self->switch_branch($self->{config_branch});
+        croak_failed(copy($kernel_config, "config"));
+        shell 'git commit -q -m "Modified config" config';
+    }
+}
+
+sub prepare_main_branch
+{
+    my $self = shift;
+    my $o = $self->{options};
+
+    $self->require_main_branch();
+    my $version_tag = $o->require('version');
+
+    # TODO: any merges in $self->{main_branch} should be reverted if something fails
+
+    if (! exists $self->{branches}->{$self->{main_branch}}) {
+        $self->create_branch($self->{main_branch}, $version_tag);
+    } else {
+        $self->switch_branch($self->{main_branch});
+        $self->verbose_print("Merging with ${version_tag}...");
+        shell "git merge --no-stat --no-log ${version_tag}";
+    }
+
+    if ($o->get('track_config')) {
+        $self->require_config_branch();
+        $self->verbose_print("Merging with $self->{config_branch}...");
+        # FIXME: discrepancy here
+        shell "git merge --no-stat --no-log $self->{config_branch}";
+    }
+
+    if ($o->get('merge_tuxonice')) {
+        if (! exists $self->{branches}->{$self->{tuxonice_branch}}) {
+            $self->pull_tuxonice();
+            $self->switch_branch($self->{main_branch});
+        }
+        $self->verbose_print("Merging with $self->{tuxonice_branch}...");
+        shell "git merge --no-stat --no-log $self->{tuxonice_branch}";
+    }
+
+    if ($o->get('merge_branch')) {
+        for (@{$o->get('merge_branch')}) {
+            if (! exists $self->{branches}->{$_}) {
+                die "You asked to merge branch $_, but no such branch exists!\n";
+            }
+            $self->verbose_print("Merging with $_...");
+            shell "git merge --no-stat --no-log $_";
+        }
+    }
+}
+
+sub prepare_build_dir
+{
+    my $self = shift;
+    my $o = $self->{options};
+    my $src_dir = $o->require('src_dir');
+    my $build_dir = $o->require('build_dir');
+
+    if (!-d $build_dir) {
+        croak_failed(mkdir $build_dir);
+    }
+
+    $self->verbose_print("Copying kernel sources...");
+    shell "rsync -aH '--exclude=.git*' ${src_dir}/ ${build_dir}/";
+    return $build_dir;
+}
+
+use File::stat;
+
+sub configure_and_build
+{
+    my $self = shift;
+    my $o = $self->{options};
+    my $build_dir = $self->prepare_build_dir();
+
+
+    my $kernel_config = $o->get('kernel_config');
+    my $tracked_config =
+        $o->get('track_config') ?
+            'config' :
+            $kernel_config ? $kernel_config : undef;
+    my $build_config = "${build_dir}/.config";
+
+    if ($tracked_config) {
+        croak_failed(copy($tracked_config, $build_config));
+    }
+
+    my $config_mode = $o->require('config_mode');
+    $self->require_main_branch();
+
+    my @make_opts = ("O=${build_dir}");
+    my @kpkg_opts = ("BUILD_DIR=${build_dir}");
+
+    if ($o->get('jobs')) {
+        push @make_opts, (-j => $o->get('jobs'));
+    }
+    if ($o->get('make_flags')) {
+        push @make_opts, split(' ', $o->get('make_flags'));
+    }
+    my $arch;
+    if ($arch = $o->get('arch')) {
+        push @make_opts, "ARCH=${arch}";
+        push @kpkg_opts, "ARCH=${arch}";
+        if (!$o->get('deb_arch')) {
+            print STDERR "Warning: deb_arch not found for ${arch}, shoud specify --debian-architecture\n";
+        } else {
+            $ENV{DEB_HOST_ARCH} = $o->get('deb_arch');
+        }
+    }
+
+    $self->switch_branch($self->{main_branch});
+    if ($config_mode eq 'auto') {
+        # TODO: error descriptive message if no $tracked_config || $build_config exists
+        my $config_version = get_config_version($tracked_config || $build_config);
+        if ($config_version eq $self->{kernel_version}) {
+            $self->verbose_print("Kernel and config versions match $config_version");
+            $config_mode = $o->set('config_mode', 'skip');
+        } elsif (compare_versions($self->{kernel_version}, $config_version) > 0) {
+            $self->verbose_print("Upgrading config from $config_version to $self->{kernel_version}...");
+            $config_mode = $o->set('config_mode',
+                $o->get('interactive') ? 'silentoldconfig' : '__quiet_upgrade');
+        } else {
+            $self->verbose_print("Downgrading config from $config_version to $self->{kernel_version}...");
+            $config_mode = $o->set('config_mode', 'silentoldconfig');
+        }
+    }
+
+    # TODO: configure only when we got something from updating branches
+    #       or --force-config option supplied
+    #       or --config-mode=menuconfig
+    if ($config_mode ne 'skip') {
+        $self->verbose_print("Configuring kernel...");
+
+        my $config_old = "${build_config}.old";
+        my $old_st = stat($build_config);
+
+        if ($config_mode eq '__quiet_upgrade') {
+            quiet_upgrade(\@make_opts);
+        } else {
+            shell (make => @make_opts, $config_mode);
+        }
+
+        my $new_st = stat($build_config);
+        my $config_changed = 0;
+
+        # detect if config has changed
+        if ($old_st && $new_st && $old_st->mtime < $new_st->mtime) {
+            # actual write was done, detect that it was not just comment change
+            if (-f $config_old) {
+                system('diff', '-dqBI', '^#', $config_old, $build_config);
+                if (get_system_status($?) > 0) {
+                    $config_changed = 1;
+                } else {
+                    $self->verbose_print(".config was not changed");
+                }
+            } else {
+                print STDERR "Warning: .config.old was not created!\n";
+                $config_changed = 1;
+            }
+        } elsif (!$old_st && $new_st) {
+            $self->verbose_print("New .config was created");
+            $config_changed = 1;
+        }
+
+        if ($config_changed) {
+            if ($o->get('track_config')) {
+                $self->require_config_branch();
+                $self->switch_branch($self->{config_branch});
+                $self->verbose_print("Updating kernel config...");
+                croak_failed(copy($build_config, $tracked_config));
+                shell 'git commit -q -m "Updated config" config';
+                $self->verbose_print("Saved config to git branch $self->{config_branch}");
+                $self->switch_branch($self->{main_branch});
+                $self->verbose_print("Merging with $self->{config_branch}...");
+                shell "git merge --no-stat --no-log $self->{config_branch}";
+            } elsif ($kernel_config) {
+                croak_failed(copy($build_config, $tracked_config));
+                $self->verbose_print("Saved config to file " . $tracked_config);
+            }
+        }
++-
+    }
+    # FIXME: kernel rebuilds always
+    if ($o->get('build')) {
+        $self->verbose_print("Building in ${build_dir}...");
+        if ($o->get('build_method') eq 'deb-pkg') {
+            shell (make => @make_opts, 'deb-pkg');
+        } elsif($o->get('build_method') eq 'ubuntu') {
+            %ENV{AUTOBUILD} = 1;
+            shell (fakeroot => debian/rules, "binary-" . $o->get('branch_prefix'), 'skipconfig=1', 'skipabi=1', 'skipmodule=1', 'no_dumpfile=1');
+        } else {
+            if (!$o->get('package_only')) {
+                shell (make => @make_opts, 'bzImage', 'modules');
+            }
+            shell (make => '-f', $o->get('share_dir') . "/kpkg_build.mk",
+                    @kpkg_opts, 'kpkg_package');
+        }
+    }
+}
+
+sub git
+{
+    my ($in, $out);
+    my (@out, @err);
+    my $err = Symbol::gensym;
+    my $pid = IPC::Open3::open3($in, $out, $err, git => @_);
+    close $in;
+    chomp(@out = <$out>);
+    @err = <$err>;
+    waitpid $pid, 0;
+    if ($?) {
+        print STDERR @err;
+        die "Git command failed: git ", join(' ', @_), "\n";
+    }
+    return @out;
+}
+
+my $sigpipe = 0;
+
+sub sigpipe
+{
+    $sigpipe = 1;
+}
+
+BEGIN
+{
+    $SIG{PIPE} = \&sigpipe;
+}
+
+use IO::Select;
+use IO::Handle;
+use POSIX ":sys_wait_h";
+use Fcntl;
+
+sub quiet_upgrade
+{
+    my $make_opts = shift;
+    my ($in, $out, $err);
+    $err = gensym;
+    # TODO: sometimes cleanup of build directory is needed
+    # it is related to unsatisfactory timestamps due to git branches checkout
+    my $pid = IPC::Open3::open3($in, $out, $err, make => @$make_opts, 'oldconfig');
+    my $flags = fcntl($out, F_GETFL, 0);
+    fcntl($out, F_SETFL, $flags | O_NONBLOCK);
+    $flags = fcntl($err, F_GETFL, 0);
+    fcntl($err, F_SETFL, $flags | O_NONBLOCK);
+    my $r = IO::Select->new($out, $err);
+    my $w = IO::Select->new($in);
+    autoflush STDOUT 1;
+    autoflush STDERR 1;
+    my $waitpid;
+    my $output_stage = 0; # 0 - before output; 1 - in output; 2 - output done
+    do {
+        my ($rset, $wset, $eset) = IO::Select->select($r, $w, undef, 0);
+        for my $fd (@$rset) {
+            my $print_fd = $fd == $out ? \*STDOUT : \*STDERR;
+            my $buf;
+            while (0 < sysread $fd, $buf, 1024) {
+                print $print_fd $buf;
+                if ($fd == $out) {
+                    $output_stage = 1;
+                }
+            }
+        }
+        if (! @$rset && $output_stage == 1) {
+            $output_stage = 2;
+        }
+        if ($output_stage == 2 && @$wset) {
+            my $buf = "\n";
+            print $buf;
+            syswrite $in, $buf;
+            $output_stage = 0;
+        }
+    } while (0 == ($waitpid = waitpid $pid, WNOHANG) && !$sigpipe);
+
+    if ($waitpid > 0) {
+        check_system_rc($?);
+    } else {
+        if ($sigpipe) {
+            print STDERR "Got SIGPIPE!\n";
+        }
+        confess $!;
+    }
+}
+
+sub switch_branch
+{
+    my $self = shift;
+
+    my $branch = shift;
+    if (not exists $self->{branches}->{$branch}) {
+        confess "Not found branch '$branch' to switch!\n";
+    }
+
+    if ($self->{current_branch} ne $branch) {
+        $self->verbose_print("Switching to branch $branch...");
+        shell "git checkout $branch";
+        $self->{current_branch} = $branch;
+    }
+}
+
+sub create_branch
+{
+    my $self = shift;
+
+    my $branch_name = shift;
+    my $version_tag = shift;
+    if (!defined $branch_name || !defined $version_tag) {
+        confess "Empty parameter: \$branch_name = '$branch_name', $version_tag = '$version_tag'";
+    }
+    $self->verbose_print("Creating branch $branch_name from $version_tag...");
+    shell "git checkout -b $branch_name $version_tag";
+    $self->{branches}->{$branch_name} = 1;
+    $self->{current_branch} = $branch_name;
+}
+
+1;
+
+package main;
+use strict;
+
+my $config = Config::get_configuration();
+
+for my $s (keys %$config) {
+    KernelBuild->execute($config->{$s});
+}

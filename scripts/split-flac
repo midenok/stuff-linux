@@ -1,0 +1,163 @@
+#!/bin/sh
+
+optstring_short="c:p:fqvnx"
+
+optstring_long="\
+    cue-sheet:,prefix:,force,quiet,verbose,dry-run,remove"
+
+TEMP=$(getopt -o "${optstring_short}" --long "${optstring_long}" --name 'split-flac' -- "$@")
+if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+eval set -- "$TEMP"
+
+unset prefix
+unset cue
+unset force
+unset quiet
+unset verbose
+unset dryrun
+unset pdryrun
+unset remove
+
+while true
+do
+    case "$1" in
+        -c|--cue-sheet)
+            cue="$2"
+            shift 2;;
+        -p|--prefix)
+            prefix="$2"
+            shift 2;;
+        -f|--force)
+            force=1
+            shift;;
+        -q|--quiet)
+            quiet=1
+            shift;;
+        -v|--verbose)
+            verbose=1
+            shift;;
+        -n|--dry-run)
+            dryrun=echo
+            pdryrun=dryrun_pipe
+            shift;;
+        -x|--remove)
+            remove=1
+            shift;;
+        --) shift; break;;
+    esac
+done
+
+if [ -z "$1" ]
+then
+    echo "SRC argument required!" >&2; exit 1;
+fi
+
+src="$1"
+dst="$2"
+
+if [ -f "$src" ]
+then
+    mode="file"
+elif [ -d "$src" ]
+then
+    mode="dir"
+    src="${src%/}"
+    if [ -n "$cue" ]
+    then
+        echo "--cue-sheet option for directory SRC is not possible!" >&2; exit 1;
+    fi
+else
+    echo "SRC must be file or directory!" >&2; exit 1;
+fi
+
+dst="${dst%/}"
+
+if [ -n "$dst" -a ! -d "$dst" ]
+then
+    echo "DST must be directory!" >&2; exit 1;
+fi
+
+dryrun_pipe()
+{
+    if [ "$dryrun" ]
+    then
+        cat
+        echo '  |' "$@"
+    else
+        "$@"
+    fi
+}
+
+
+break_flac()
+{
+    flac="$1"
+    prefix2="${flac%%.flac}"
+    [ $mode = "dir" -o -z "$cue" ] && cue="${prefix2}.cue"
+
+    if [ ! -f "$cue" ]
+    then
+        echo "Cue sheet not found: $cue" >&2;
+        return 2
+    fi
+
+    prefix2=$(basename "$prefix2")'-'
+    [ -n "$prefix" ] && prefix2=$prefix
+    
+    outdir=$(dirname "$flac")
+    if [ -n "$dst" ]
+    then
+        if [ "$outdir" = . -o $mode = "file" ]
+        then
+            outdir="$dst"
+        else
+            dirsuff="${outdir##$src}"
+            dirsuff="${dirsuff#/}"
+            outdir="${dst}/${dirsuff}"
+        fi
+        outdir="${outdir%/}"
+        # FIXME: fix bug wrong directory created in 'file' mode without dst
+        $dryrun mkdir -p "$outdir" ||
+            exit $?
+    fi
+
+    [ "$verbose" ] && set -x
+
+    $dryrun cuebreakpoints "$cue" | $pdryrun shnsplit -O never -a "$prefix2" -d "$outdir" -o flac "$flac" || return $?
+    $dryrun cuetag "$cue" ${outdir}/${prefix2}[0-9]*.flac || return $?
+
+    [ "$remove" ] &&
+        $dryrun rm -rf "$flac"
+
+    set +x
+}
+
+if [ $mode = "dir" ]
+then
+    find "$src" -type f -name "*.flac" | while read f
+    do
+        break_flac "$f" || {
+            s=$?
+            [ -z "$force" ] && exit $s
+        }
+    done
+else
+    break_flac "$src" || exit $s
+fi
+
+
+exit 0
+
+if [ "$2" ]
+then
+    cue="$2"
+elif [ -f "${1%%.flac}.cue" ]
+then
+    cue="${1%%.flac}.cue"
+    
+fi
+
+flac --cuesheet="$cue" "$1" --until=100 -f -o 2.flac
+
+cuebreakpoints sample.cue | shnsplit -o flac sample.flac
+cuetag sample.cue split-track*.flac

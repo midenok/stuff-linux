@@ -1,0 +1,402 @@
+<!DOCTYPE UI><UI version="3.0" stdsetdef="1">
+<class>Form1</class>
+<widget class="Dialog">
+    <property name="name">
+        <cstring>Form1</cstring>
+    </property>
+    <property name="geometry">
+        <rect>
+            <x>0</x>
+            <y>0</y>
+            <width>454</width>
+            <height>418</height>
+        </rect>
+    </property>
+    <property name="paletteForegroundColor">
+        <color>
+            <red>0</red>
+            <green>0</green>
+            <blue>0</blue>
+        </color>
+    </property>
+    <property name="caption">
+        <string>Disk information</string>
+    </property>
+    <property name="populationText">
+        <string></string>
+    </property>
+    <property name="associations" stdset="0">
+        <stringlist>
+            <string></string>
+            <string>FileSelector1.setText(_ARG1 + "/info")
+//DiskName.setText(_ARG2)
+DiskLabel.setText(_ARG2)
+disconnect("DiskLabel", "textChanged(const QString&amp;)", "DiskName", "selectAll()")</string>
+            <string></string>
+        </stringlist>
+    </property>
+    <property name="useInternalParser">
+        <bool>true</bool>
+    </property>
+    <widget class="Label">
+        <property name="name">
+            <cstring>Label4</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>30</x>
+                <y>20</y>
+                <width>44</width>
+                <height>20</height>
+            </rect>
+        </property>
+        <property name="text">
+            <string>Path:</string>
+        </property>
+    </widget>
+    <widget class="Label">
+        <property name="name">
+            <cstring>Label4_2</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>30</x>
+                <y>80</y>
+                <width>80</width>
+                <height>20</height>
+            </rect>
+        </property>
+        <property name="text">
+            <string>Disk label:</string>
+        </property>
+    </widget>
+    <widget class="LineEdit">
+        <property name="name">
+            <cstring>DiskLabel</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>30</x>
+                <y>100</y>
+                <width>400</width>
+                <height>24</height>
+            </rect>
+        </property>
+        <property name="associations" stdset="0">
+            <stringlist>
+                <string></string>
+            </stringlist>
+        </property>
+    </widget>
+    <widget class="FileSelector">
+        <property name="name">
+            <cstring>FileSelector1</cstring>
+        </property>
+        <property name="enabled">
+            <bool>true</bool>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>30</x>
+                <y>40</y>
+                <width>390</width>
+                <height>26</height>
+            </rect>
+        </property>
+        <property name="showEditor">
+            <bool>true</bool>
+        </property>
+    </widget>
+    <widget class="Label">
+        <property name="name">
+            <cstring>label1</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>30</x>
+                <y>140</y>
+                <width>80</width>
+                <height>20</height>
+            </rect>
+        </property>
+        <property name="text">
+            <string>Title :</string>
+        </property>
+        <property name="associations" stdset="0">
+            <stringlist>
+                <string></string>
+            </stringlist>
+        </property>
+    </widget>
+    <widget class="Label">
+        <property name="name">
+            <cstring>Label3</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>30</x>
+                <y>270</y>
+                <width>70</width>
+                <height>20</height>
+            </rect>
+        </property>
+        <property name="text">
+            <string>Disk type:</string>
+        </property>
+    </widget>
+    <widget class="ComboBox">
+        <item>
+            <property name="text">
+                <string>DVD movie</string>
+            </property>
+        </item>
+        <item>
+            <property name="text">
+                <string>DVD documental</string>
+            </property>
+        </item>
+        <item>
+            <property name="text">
+                <string>DVD animation</string>
+            </property>
+        </item>
+        <item>
+            <property name="text">
+                <string>MPEG4 movie</string>
+            </property>
+        </item>
+        <item>
+            <property name="text">
+                <string>MPEG4 documental</string>
+            </property>
+        </item>
+        <item>
+            <property name="text">
+                <string>MPEG4 animation</string>
+            </property>
+        </item>
+        <item>
+            <property name="text">
+                <string>MP3 music</string>
+            </property>
+        </item>
+        <item>
+            <property name="text">
+                <string>Software</string>
+            </property>
+        </item>
+        <item>
+            <property name="text">
+                <string>Clips, pictures</string>
+            </property>
+        </item>
+        <item>
+            <property name="text">
+                <string>Porno</string>
+            </property>
+        </item>
+        <property name="name">
+            <cstring>ComboBox1</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>30</x>
+                <y>290</y>
+                <width>160</width>
+                <height>24</height>
+            </rect>
+        </property>
+    </widget>
+    <widget class="Label">
+        <property name="name">
+            <cstring>label1_2</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>30</x>
+                <y>200</y>
+                <width>80</width>
+                <height>20</height>
+            </rect>
+        </property>
+        <property name="text">
+            <string>Title english:</string>
+        </property>
+        <property name="associations" stdset="0">
+            <stringlist>
+                <string></string>
+            </stringlist>
+        </property>
+    </widget>
+    <widget class="ExecButton">
+        <property name="name">
+            <cstring>PlayButton</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>320</x>
+                <y>290</y>
+                <width>90</width>
+                <height>26</height>
+            </rect>
+        </property>
+        <property name="text">
+            <string>Pl&amp;ay</string>
+        </property>
+        <property name="associations" stdset="0">
+            <stringlist>
+                <string>execBackground("smplayer dvd://1:" + _ARG3 + "/" + _ARG1 + "/disk")
+</string>
+            </stringlist>
+        </property>
+    </widget>
+    <widget class="LineEdit">
+        <property name="name">
+            <cstring>TitleEnglish</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>30</x>
+                <y>220</y>
+                <width>401</width>
+                <height>23</height>
+            </rect>
+        </property>
+        <property name="populationText">
+            <string>exec("dcop kkbswitch KBSwitchIntf selectGroup 0")</string>
+        </property>
+        <property name="associations" stdset="0">
+            <stringlist>
+                <string></string>
+            </stringlist>
+        </property>
+    </widget>
+    <widget class="LineEdit">
+        <property name="name">
+            <cstring>DiskName</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>30</x>
+                <y>160</y>
+                <width>401</width>
+                <height>23</height>
+            </rect>
+        </property>
+        <property name="populationText">
+            <string>exec("dcop kkbswitch KBSwitchIntf selectGroup 1")</string>
+        </property>
+        <property name="associations" stdset="0">
+            <stringlist>
+                <string></string>
+            </stringlist>
+        </property>
+    </widget>
+    <widget class="CheckBox">
+        <property name="name">
+            <cstring>CheckBoxSeen</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>220</x>
+                <y>290</y>
+                <width>60</width>
+                <height>20</height>
+            </rect>
+        </property>
+        <property name="text">
+            <string>See&amp;n</string>
+        </property>
+        <property name="associations" stdset="0">
+            <stringlist>
+                <string></string>
+                <string></string>
+                <string></string>
+            </stringlist>
+        </property>
+    </widget>
+    <widget class="CheckBox">
+        <property name="name">
+            <cstring>CheckBoxErrors</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>220</x>
+                <y>320</y>
+                <width>60</width>
+                <height>20</height>
+            </rect>
+        </property>
+        <property name="text">
+            <string>Err&amp;ors</string>
+        </property>
+    </widget>
+    <widget class="CloseButton">
+        <property name="name">
+            <cstring>CloseButton1</cstring>
+        </property>
+        <property name="geometry">
+            <rect>
+                <x>190</x>
+                <y>370</y>
+                <width>71</width>
+                <height>26</height>
+            </rect>
+        </property>
+        <property name="text">
+            <string>O&amp;k</string>
+        </property>
+        <property name="default">
+            <bool>true</bool>
+        </property>
+        <property name="associations" stdset="0">
+            <stringlist>
+                <string>file = FileSelector1.text
+text = \
+    "Label: " + DiskLabel.text + "\n" + \
+    "Title: " + DiskName.text + "\n" + \
+    "Type: " + ComboBox1.item(ComboBox1.currentItem) + "\n"
+
+if !str_isEmpty(TitleEnglish.text) then
+    text = text + "TitleEng: " + TitleEnglish.text + "\n"
+endif
+
+if CheckBoxSeen.checked then
+    text = text + "Seen: true\n"
+endif
+
+if CheckBoxErrors.checked then
+    text = text + "Errors: true\n"
+endif
+
+file_write(file, text)
+</string>
+            </stringlist>
+        </property>
+    </widget>
+</widget>
+<connections>
+    <connection>
+        <sender>TitleEnglish</sender>
+        <signal>selectionChanged()</signal>
+        <receiver>TitleEnglish</receiver>
+        <slot>populate()</slot>
+    </connection>
+    <connection>
+        <sender>DiskName</sender>
+        <signal>selectionChanged()</signal>
+        <receiver>DiskName</receiver>
+        <slot>populate()</slot>
+    </connection>
+</connections>
+<tabstops>
+    <tabstop>DiskLabel</tabstop>
+    <tabstop>DiskName</tabstop>
+    <tabstop>TitleEnglish</tabstop>
+    <tabstop>ComboBox1</tabstop>
+    <tabstop>CheckBoxSeen</tabstop>
+    <tabstop>PlayButton</tabstop>
+    <tabstop>CloseButton1</tabstop>
+</tabstops>
+<layoutdefaults spacing="6" margin="11"/>
+</UI>

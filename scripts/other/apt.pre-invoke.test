@@ -1,0 +1,12 @@
+#!/bin/bash
+echo -n "Executing pre-invoke script..."
+LOG=/var/tmp/apt.log
+MESSAGE="Pre-Invoke hook called"
+( date "+%b %e %H:%M:%S $MESSAGE"
+echo "Standard input:"
+while read
+do
+    echo $REPLY
+done
+) >> $LOG
+echo " done."

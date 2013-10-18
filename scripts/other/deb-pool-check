@@ -1,0 +1,79 @@
+#!/usr/bin/perl
+use YAML;
+use IO::File;
+use Parse::Debian::Packages;
+use Parse::DebControl;
+use Data::Dumper;
+
+my %C = (
+    dir => "/home/midenok/incoming/trinity",
+    dist => "maverick"
+);
+
+my $dist = "$C{dir}/dists/$C{dist}";
+my @dirs = `find $dist -type d -name binary-amd64`;
+
+my %packages;
+my $registered = 0;
+
+for my $d (@dirs) {
+    chomp $d;
+    my $fn = "${d}/Packages";
+    my $fh = IO::File->new($fn)
+        or die "${fn}: $!";
+    my $parser = Parse::Debian::Packages->new($fh);
+
+    while (my %p = $parser->next) {
+        $packages{$p{Package}}->{$p{Version}} = \%p;
+        ++$registered;
+    }
+}
+
+print "Registered in Packages: ${registered}\n";
+
+my @debs = `find $C{dir}/pool -type f -name *.deb`;
+my $parser = new Parse::DebControl;
+
+my %packages2;
+
+print "Collecting debs data...\n";
+my $counter = 0;
+my $max = @debs;
+my $show_next = 1;
+my $show_step = 1;
+
+use integer;
+
+for my $f (@debs)
+{
+    chomp $f;
+    my $control = `dpkg -f ${f}`;
+    my $p = $parser->parse_mem($control)->[0];
+    $packages2{$p->{Package}}->{$p->{Version}} = $f;
+    ++$counter;
+    my $percents = $counter * 100 / $max;
+    if ($percents > $show_next) {
+        print "${percents}%\r";
+        $show_next += $show_step;
+    }
+}
+
+print "Scanned ${max} packages\n";
+
+my $valid = 0;
+my @to_delete;
+
+for my $p (keys %packages2) {
+    for my $v (keys %{$packages2{$p}}) {
+        if (exists $packages{$p}->{$v}) {
+            ++$valid;
+        } else {
+            push @to_delete, $packages2{$p}->{$v};
+        }
+    }
+}
+
+my $invalid = @to_delete;
+print "Valid packages: ${valid}\n";
+print "Packages to delete: ${invalid}\n";
+print "Packages total: ". ($valid + $invalid). "\n";

@@ -1,0 +1,49 @@
+#!/usr/bin/perl
+use YAML;
+use IO::File;
+use Parse::Debian::Packages;
+
+my %C = (
+    dir => "/home/midenok/incoming/trinity",
+    dist => "maverick"
+);
+
+my $dist = "$C{dir}/dists/$C{dist}";
+my @dirs = `find $dist -type d -name binary-amd64`;
+
+my %packages;
+my $registered = 0;
+
+for my $d (@dirs) {
+    chomp $d;
+    my $fn = "${d}/Packages";
+    my $fh = IO::File->new($fn)
+        or die "${fn}: $!";
+    my $parser = Parse::Debian::Packages->new($fh);
+
+    while (my %p = $parser->next) {
+        $packages{$p{Filename}} = \%p;
+        ++$registered;
+    }
+}
+
+print "Registered in Packages: ${registered}\n";
+
+my @debs = `find $C{dir}/pool -type f -name *.deb`;
+my $debs_count = @debs;
+
+print "Found total packages in pool: ${debs_count}\n";
+
+my $deleted = 0;
+
+for my $f (@debs) {
+    chomp $f;
+    my $key = $f;
+    $key =~ s|^$C{dir}/||;
+    next if exists $packages{$key};
+    unlink $f and
+        ++$deleted;
+}
+
+print "Deleted ${deleted} packages\n";
+print "Keeped ". ($debs_count - $deleted). " packages\n";

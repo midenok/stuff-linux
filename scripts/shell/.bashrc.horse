@@ -1,0 +1,62 @@
+# ~/.bashrc: executed by bash(1) for non-login shells.
+
+export PS1='\h:\W\$ '
+umask 022
+
+cpufreq ()
+{
+    cpufreq_dir=/sys/devices/system/cpu/cpu0/cpufreq
+    if [ -z "$1" ]
+    then
+	echo -n "Current scaling governor: "
+	cat $cpufreq_dir/scaling_governor
+	echo "Available governors:"
+	cat $cpufreq_dir/scaling_available_governors
+    else
+	echo "$1" > $cpufreq_dir/scaling_governor
+	echo -n "Current scaling governor: "
+	cat $cpufreq_dir/scaling_governor
+    fi
+}
+
+restart () { /etc/init.d/$1 restart; }
+reload () { /etc/init.d/$1 reload; }
+start () { /etc/init.d/$1 start; }
+stop () { /etc/init.d/$1 stop; }
+doc () { cd /usr/share/doc/$1; }
+
+apt ()
+{
+    conf=/etc/apt/apt-$1.conf
+    if [ -f "$conf" ]
+    then
+	shift
+	APT_CONFIG=$conf "$@"
+    fi
+    unset -v conf
+}
+
+dselect () {
+    DSELECT=/usr/bin/dselect
+    [ -z "$APT_CONFIG" ] && export APT_CONFIG=/etc/apt/apt-inet.conf
+    $DSELECT --expert select
+    $DSELECT --expert
+}
+
+alias ua='update-alternatives'
+alias syslog='pager +G /var/log/syslog'
+alias update-iptables='ferm /etc/ferm/ferm.conf'
+
+# You may uncomment the following lines if you want `ls' to be colorized:
+
+export LS_OPTIONS='--color=auto'
+eval `dircolors`
+alias ls='ls $LS_OPTIONS'
+alias ll='ls $LS_OPTIONS -l'
+alias l='ls $LS_OPTIONS -lA'
+
+
+# Some more alias to avoid making mistakes:
+# alias rm='rm -i'
+# alias cp='cp -i'
+# alias mv='mv -i'

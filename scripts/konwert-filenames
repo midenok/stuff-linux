@@ -1,0 +1,19 @@
+#!/bin/sh
+
+# usually, when filesystem is mounted without parameters it uses iso1 by default
+# so, use utf8-iso1 to recover wrong encoding
+
+from_to=$1
+shift
+echo a|konwert "$from_to" > /dev/null ||
+    exit $?
+
+for f in "$@"
+do
+    n=$(echo "$f"|konwert $from_to)
+    if [ "$n" != "$f" ]
+    then
+        echo "$n"
+        mv -i "$f" "$n"
+    fi
+done

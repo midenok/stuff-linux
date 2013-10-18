@@ -1,0 +1,31 @@
+#!/usr/bin/perl
+use strict;
+
+my %CONFIG = (
+    cmd => '/usr/sbin/tcpdump',
+    args => [qw(-ttt -n)],
+    filter => 'tcp and (host dev2 and port 10128) or (host vms and port 80)'
+);
+
+-x $CONFIG{cmd} or die "Can't start $CONFIG{cmd}: $!\n";
+
+our $| = 1;
+open (TCPDUMP, '-|', $CONFIG{cmd}, @{$CONFIG{args}}, $CONFIG{filter})
+    or die "Can't start tcpdump: $!\n";
+
+my ($time, $secs, $msecs, $usecs) = 0;
+
+format STDOUT =
+@### @0# @0# @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<...
+$secs, $msecs, $usecs, $4
+.
+
+while (<TCPDUMP>) {
+    m/^((\d+)\. )?(\d{6})(.*)$/
+	or do { print "Something wrong here:\n", $_; die "Unknown format"; };
+    $time += $2*1000000 + $3;
+    $usecs = $time % 1000;
+    $msecs = $time / 1000 % 1000;
+    $secs = $time / 1000000;
+    write;
+}

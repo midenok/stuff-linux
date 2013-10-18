@@ -1,0 +1,239 @@
+#!/usr/bin/perl
+
+=head1 SYNOPSIS
+
+srtparse [COMMAND] [OPTION]... DIR|FILE...
+
+=head1 COMMANDS
+
+=over 4
+
+=item B<(default command)>
+
+Make two SRT files comparison, write CSV as result.
+
+=back
+
+=head1 OPTIONS
+
+=item B<--srt1 FILE>
+
+SRT file A for comparison. 
+
+=item B<--srt2 FILE>
+
+SRT file B for comparison.
+
+=item B<--csv, -o FILE>
+
+Output CSV file as a result of comparison.
+
+=over 4
+
+=back
+
+=head1 COMMENTS
+
+Range overlaps decisions:
+
+[A1==========]    [A2================] [A3==] [A4=====]      [A3==========]                         [A4========]
+           [B1============] [B2===================]                          [B3=======]
+
+1. fill table with A-ranges
+2. associate B-ranges by the following rules:
+2.1. if B overlaps only single A, then associate B with that A (B2->A2);
+2.2. if B overlaps multiple A:
+2.2.3 if percentage of overlap between A and B is more (or eq) than 50%, then add A to merge;
+2.2.4 otherwise, if percentage is less than 50%, then compare overlap with space after A.
+If space is higher, than length of overlap, then exclude A from merge;
+2.3. swap A-ranges and B-ranges, repeat 2.2.
+
+=cut
+
+
+package Config;
+push our @ISA, 'Class';
+
+use Getopt::Long qw(:config bundling);
+use Pod::Usage;
+use Data::Dumper;
+use strict;
+
+sub new
+{
+    return Class::new($_[0], {
+        csv => '-'
+    });
+}
+
+sub ensure
+{
+    return ref($_[0]) eq 'Config' ?
+        $_[0] :
+        Config->new();
+}
+
+sub get_options
+{
+    __PACKAGE__->construct(\@_);
+
+    my $c = shift;
+
+    GetOptions ($c, qw(
+        srt1=s
+        srt2=s
+        csv|o=s
+        dump|D+
+        help|h
+    )) or exit 1;
+
+    if ($c->{help}) {
+        pod2usage(-verbose => 99, -sections => 'SYNOPSIS|COMMANDS|OPTIONS');
+    }
+    
+    if (!$c->{srt1}) {
+        $c->{srt1} = shift @ARGV;
+    }
+    
+    if (!$c->{srt2}) {
+        $c->{srt2} = shift @ARGV;
+    }
+    
+    if (@ARGV) {
+        die "Unknown arguments: ", join(" ", @ARGV), "\n";
+    }
+    
+    $c->require_options(qw[srt1 srt2]);
+
+    return $c;
+}
+
+sub require_options
+{
+    my $c = shift;
+    my @missed = grep {
+        not defined $c->{$_}
+    } @_;
+    if (@missed) {
+        die "Required options missed: ", join(", ", map("--$_", @missed)), "\n";
+    }
+}
+
+sub dump
+{
+    my $c = shift;
+    if ($c->{dump}) {
+        $c->{dump}--;
+        for (@_) {
+            print Dumper($_);
+        }
+        if (!$c->{dump}) {
+            exit 0;
+        }
+    }
+}
+
+1;
+
+package main;
+use strict;
+use lib "/home/midenok/scripts/subtitles/lib";
+use Video::Subtitle::SRT;
+use Data::Dumper;
+
+my $c = Config::get_options();
+$c->dump($c);
+
+my @srt1;
+my @srt2;
+
+Video::Subtitle::SRT->new (sub {
+    my $data = shift;
+    push @srt1, $data;
+    # $data->{number}
+    # $data->{start_time}
+    # $data->{end_time}
+    # $data->{text}
+})->parse ($c->{srt1});
+
+Video::Subtitle::SRT->new (sub {
+    push @srt2, $_[0];
+})->parse ($c->{srt2});
+
+
+
+$c->dump(\@srt1);
+
+package Class;
+
+BEGIN
+{
+    our @ISA = 'Exporter';
+}
+
+sub new
+{
+    my $class = ref $_[0] || $_[0];
+    return bless $_[1] || {} => $class;
+}
+
+sub construct(*)
+{
+    my $package = shift;
+    my $args = $_[0];
+    if (ref($args->[0]) eq $package) {
+        return;
+    }
+
+    if (exists $args->[0] && $args->[0] eq $package) {
+        shift @$args;
+    }
+    
+    my $self = $package->new(@$args);
+    unshift @$args, $self;
+}
+
+1;
+
+
+package Exception;
+use strict;
+use overload
+    '""' => sub { return $_[0]->[0]; },
+    '==' => sub { return $_[0]->[0] == $_[1]},
+    '!=' => sub { return $_[0]->[0] != $_[1]};
+
+sub try (&$) {
+   my($try, $catch) = @_;
+   eval {&$try};
+   if ($@) {
+      local $_ = $@;
+      chomp;
+      return &$catch;
+   }
+}
+
+sub catch (&) { $_[0] }
+
+sub throw (@)
+{
+    my $data = shift;
+    my $class = __PACKAGE__;
+    if (ref($data) eq $class || $data eq $class) {
+        $data = shift;
+    }
+    my $self = bless [$data] => $class;
+    die $self;
+}
+
+sub import
+{
+    my $caller = caller;
+    for my $fn (qw(try catch throw)) {
+        my $proto = prototype($fn);
+        eval "sub ${caller}::${fn}(${proto});".
+             "*${caller}::${fn} = \\&". __PACKAGE__. "::${fn};";
+    }
+}
+
+1;

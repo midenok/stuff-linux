@@ -1,0 +1,173 @@
+#!/usr/bin/perl
+
+use strict;
+use Carp;
+use Data::Dumper;
+use lib '/home/sigil/scripts/kernel/lib';
+use KernelConfig;
+
+use Getopt::Long qw(:config bundling);
+use Path::Class qw(file);
+use File::Copy;
+
+my %C = (
+    debian_dir => 'debian'
+);
+
+%C = (%C,
+    config => ".config",
+    config_saved => "$C{debian_dir}/.config",
+    changelog => "$C{debian_dir}/changelog",
+    control => "$C{debian_dir}/control",
+    official => "$C{debian_dir}/official",
+    increment_done => "$C{debian_dir}/changelog.incremented",
+    stamp => "$C{debian_dir}/stamp"
+);
+
+Getopt::Long::Configure(qw(
+    permute
+    pass_through));
+    
+GetOptions (\%C, qw(
+    initial_revision|initial-revision|r=s
+    force_stamps|force-stamps|f
+));
+
+my @options = qw(--rootcmd fakeroot);
+my $changelog;
+
+if (-f $C{changelog}) {
+    $changelog = parse_changelog();
+    increment_changelog($changelog);
+} else {
+    $C{initial_revision} = '.01'
+        unless exists $C{initial_revision};
+    push @options, ('--revision', $C{initial_revision});
+    # TODO: test for second entry when make-kpkg failed
+}
+
+safe_system(qw(rm -rf $C{stamp}))
+    if $C{force_stamps};
+
+$ENV{CONCURRENCY_LEVEL} = count_processors();
+$ENV{LANG} = 'POSIX';
+delete $ENV{LC_MESSAGES};
+safe_system(qw(make-kpkg kernel_image), @options);
+
+# TODO: copy should be done only when there are config changes
+copy $C{config}, $C{config_saved}
+    or die "copy: $!";
+unlink $C{increment_done};
+
+$changelog = parse_changelog()
+    unless defined $changelog;
+
+safe_system("dpkg-genchanges -q -b 2>/dev/null >../$changelog->{Source}.changes");
+
+exit 0;
+
+sub increment_changelog
+{
+    -f $C{increment_done}
+        and return 0;
+
+    my $changelog = shift;
+    my $build_version = detect_build_version($changelog);
+    my $kernel_version = detect_kernel_version();
+    my $version_changed = $build_version ne $kernel_version;
+
+    file($C{official})->touch()
+        unless -f $C{official};
+
+    my $changes = -f $C{config_saved} ?
+        KernelConfig::diff_configs($C{config_saved}, $C{config}) :
+        $version_changed ?
+            'New version' : undef;
+
+    if (defined $changes) {
+        safe_system(qw(debchange --increment --no-auto-nmu -- ), $changes);
+
+        if ($version_changed) {
+            my $new_package = $changelog->{Source};
+            $new_package =~ s/$build_version$/$kernel_version/;
+            safe_system(qw(sed -i -e), "1 s/$changelog->{Source}/$new_package/", $C{changelog});
+            safe_system(qw(sed -i -e), "s/$build_version/$kernel_version/g", $C{control});
+        }
+
+        file($C{increment_done})->touch();
+        return 1;
+    }
+    return 0;
+}
+
+sub parse_changelog
+{
+    my %changelog;
+    open PARSED, qq(dpkg-parsechangelog -l"$C{changelog}" | )
+        or die "Cannot execute dpkg-parsechangelog: $!";
+
+    my $last;
+    while (<PARSED>) {
+        chomp;
+        if (/^(\S+):\s(.+?)\s*$/) { $changelog{$1}=$2; $last=$1; }
+        elsif (/^(\S+):\s$/) { $changelog{$1}=''; $last=$1; }
+        elsif (/^\s\.$/) { $changelog{$last}.="\n"; }
+        elsif (/^\s(.+)$/) { $changelog{$last}.="$1\n"; }
+        else {
+            die "Don't understand dpkg-parsechangelog output: $_";
+        }
+    }
+
+    close PARSED
+        or die "Problem executing dpkg-parsechangelog: $!";
+    if ($?) { die "dpkg-parsechangelog failed!"; }
+
+    return \%changelog;
+}
+
+sub detect_build_version
+{
+    my $changelog = shift;
+
+    exists $changelog->{Source}
+        or die "'Source' field not found";
+
+    $changelog->{Source} =~ m/-([\d\.]+.*)$/
+        or die "Wrong format of 'Source' field";
+    return $1;
+}
+ 
+sub detect_kernel_version
+{
+    # `make kernelrelease` returns with CONFIG_LOCALVERSION postfix,
+    # while `make kernelversion` not
+    my $kernel_version = `make kernelrelease`;
+    chomp $kernel_version;
+    return $kernel_version;
+}
+
+sub safe_system
+{
+    my $rc = system @_;
+
+    $rc == -1
+        and croak "system failed ($_[0]): $!";
+
+    $rc == 0
+        or croak "$_[0] return status " . ($rc >> 8);
+}
+
+sub count_processors
+{
+    open FILE, '/proc/cpuinfo'
+        or die "/proc/cpuinfo: $!";
+    my $count = grep {/^processor/} (<FILE>);
+    close FILE;
+    return $count;
+}
+
+# force option to delete stamps
+
+# increment version should be done wisely:
+# when changes present in config according to previous build
+# when got new version of kernel (maybe not increment here)

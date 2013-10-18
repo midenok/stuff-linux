@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Komodo Project File - DO NOT EDIT -->
+<project id="41e2a606-b895-483c-9c8d-aff00a7e36df" kpf_version="5" name="com_iface2ida.komodoproject">
+<file id="22e0e5ca-4ac7-4cda-9871-962786b4246f" idref="41e2a606-b895-483c-9c8d-aff00a7e36df" name="comfaces.pl" url="comfaces.pl">
+</file>
+<preference-set idref="41e2a606-b895-483c-9c8d-aff00a7e36df">
+<preference-set id="Invocations">
+<preference-set id="com_example.h">
+  <string id="cookieparams"></string>
+  <string relative="path" id="cwd"></string>
+  <string id="documentRoot"></string>
+  <string id="executable-params"></string>
+  <string relative="path" id="filename">com_iface2ida.pl</string>
+  <string id="getparams"></string>
+  <string id="language">Perl</string>
+  <string id="mpostparams"></string>
+  <string id="params">--ls -- com_example.h</string>
+  <string id="postparams"></string>
+  <string id="posttype">application/x-www-form-urlencoded</string>
+  <string id="request-method">GET</string>
+  <boolean id="show-dialog">1</boolean>
+  <boolean id="sim-cgi">0</boolean>
+  <boolean id="use-console">0</boolean>
+  <string id="userCGIEnvironment"></string>
+  <string id="userEnvironment"></string>
+</preference-set>
+<preference-set id="d3drm.h">
+  <string id="cookieparams"></string>
+  <string relative="path" id="cwd"></string>
+  <long id="debugger.io-port">9011</long>
+  <string id="documentRoot"></string>
+  <string id="executable-params"></string>
+  <string relative="path" id="filename">comfaces.pl</string>
+  <string id="getparams"></string>
+  <string id="language">Perl</string>
+  <string id="mpostparams"></string>
+  <string id="params">--check -e skip --  /home/midenok/tmp/directx/include/d3drm.h  /home/midenok/tmp/directx/include/d3drmobj.h</string>
+  <string id="postparams"></string>
+  <string id="posttype">application/x-www-form-urlencoded</string>
+  <string id="request-method">GET</string>
+  <boolean id="show-dialog">1</boolean>
+  <boolean id="sim-cgi">0</boolean>
+  <boolean id="use-console">0</boolean>
+  <string id="userCGIEnvironment"></string>
+  <string id="userEnvironment"></string>
+  <string id="warnings">enabled</string>
+</preference-set>
+<preference-set id="d3drmobj.h">
+  <string id="cookieparams"></string>
+  <string relative="path" id="cwd"></string>
+  <string id="documentRoot"></string>
+  <string id="executable-params"></string>
+  <string relative="path" id="filename">com_iface2ida.pl</string>
+  <string id="getparams"></string>
+  <string id="language">Perl</string>
+  <string id="mpostparams"></string>
+  <string id="params">--check -- /home/midenok/tmp/directx/include/d3drmobj.h</string>
+  <string id="postparams"></string>
+  <string id="posttype">application/x-www-form-urlencoded</string>
+  <string id="request-method">GET</string>
+  <boolean id="show-dialog">1</boolean>
+  <boolean id="sim-cgi">0</boolean>
+  <boolean id="use-console">0</boolean>
+  <string id="userCGIEnvironment"></string>
+  <string id="userEnvironment"></string>
+</preference-set>
+<preference-set id="default">
+  <string id="cookieparams"></string>
+  <string relative="path" id="cwd"></string>
+  <string id="documentRoot"></string>
+  <string id="executable-params"></string>
+  <string relative="path" id="filename">com_iface2ida.pl</string>
+  <string id="getparams"></string>
+  <string id="language">Perl</string>
+  <string id="mpostparams"></string>
+  <string id="params">--ls -- /home/midenok/tmp/directx/include/dinput.h</string>
+  <string id="postparams"></string>
+  <string id="posttype">application/x-www-form-urlencoded</string>
+  <string id="request-method">GET</string>
+  <boolean id="show-dialog">1</boolean>
+  <boolean id="sim-cgi">0</boolean>
+  <boolean id="use-console">0</boolean>
+  <string id="userCGIEnvironment"></string>
+  <string id="userEnvironment"></string>
+</preference-set>
+<preference-set id="dir">
+  <string id="cookieparams"></string>
+  <string id="cwd">/home/midenok/src/crack/bomberman</string>
+  <string id="documentRoot"></string>
+  <string id="executable-params"></string>
+  <string relative="path" id="filename">segcrop.pl</string>
+  <string id="getparams"></string>
+  <string id="language">Perl</string>
+  <string id="mpostparams"></string>
+  <string id="params">bm95.asm .bss</string>
+  <string id="postparams"></string>
+  <string id="posttype">application/x-www-form-urlencoded</string>
+  <string id="request-method">GET</string>
+  <boolean id="show-dialog">1</boolean>
+  <boolean id="sim-cgi">0</boolean>
+  <boolean id="use-console">0</boolean>
+  <string id="userCGIEnvironment"></string>
+  <string id="userEnvironment"></string>
+</preference-set>
+<preference-set id="dxfile.h">
+  <string id="cookieparams"></string>
+  <string relative="path" id="cwd"></string>
+  <string id="documentRoot"></string>
+  <string id="executable-params"></string>
+  <string relative="path" id="filename">com_iface2ida.pl</string>
+  <string id="getparams"></string>
+  <string id="language">Perl</string>
+  <string id="mpostparams"></string>
+  <string id="params">--check -- /home/midenok/tmp/directx/include/dxfile.h</string>
+  <string id="postparams"></string>
+  <string id="posttype">application/x-www-form-urlencoded</string>
+  <string id="request-method">GET</string>
+  <boolean id="show-dialog">1</boolean>
+  <boolean id="sim-cgi">0</boolean>
+  <boolean id="use-console">0</boolean>
+  <string id="userCGIEnvironment"></string>
+  <string id="userEnvironment"></string>
+</preference-set>
+</preference-set>
+  <string id="currentInvocationLanguage">Perl</string>
+  <string relative="path" id="import_dirname"></string>
+  <string id="import_exclude_matches">*.*~;*.bak;*.tmp;CVS;.#*;*.pyo;*.pyc;.svn;.git;.hg;.bzr;*%25*;tmp*.html;.DS_Store;*.swp;*.kpf;*.komodoproject;.komodotools;__pycache__</string>
+  <string id="import_include_matches"></string>
+  <string id="language">Perl</string>
+  <string id="lastInvocation">d3drm.h</string>
+</preference-set>
+</project>

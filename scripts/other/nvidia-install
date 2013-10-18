@@ -1,0 +1,24 @@
+#!/bin/bash
+cd usr/src/nv
+make clean
+cd ../../..
+#./nvidia-installer --uninstall
+./nvidia-installer -a -q -N -n --utility-prefix=/usr/local --force-selinux=no --ui=none
+exit $?
+
+# old variant:
+#!/bin/bash
+./nvidia-installer \
+    --utility-prefix=/usr/local \
+    --accept-license \
+    --expert \
+    --no-questions \
+    --ui=none \
+    --no-rpms \
+    --no-network \
+    --no-abi-note \
+    --no-x-check \
+    --utility-prefix=/usr/local \
+    --documentation-prefix=/usr/local \
+    --kernel-name 2.6.23.1-toi \
+#    --kernel-module-only

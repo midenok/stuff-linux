@@ -1,0 +1,14 @@
+#!/bin/sh
+dest=~/bin
+
+install()
+{
+    /usr/bin/install "$@" "$dest"
+}
+
+install exif-keywords
+install id3-recode.pl
+install mkvsplit
+install unquote-c-string.pl
+install vbox_create_rawdrive.sh
+install debug/sgdb

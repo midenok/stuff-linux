@@ -1,0 +1,70 @@
+#!/usr/bin/perl
+use Data::Dumper;
+use strict;
+
+die "Required paramters missing"
+	if @ARGV < 2;
+
+my $oldfile = $ARGV[0];
+my $newfile = $ARGV[1];
+
+open oldfile, $oldfile
+	or die "$oldfile: $!";
+open newfile, $newfile
+	or die "$newfile: $!";
+
+my $old = get_config(*oldfile);
+my $new = get_config(*newfile);
+
+# delete same settings
+for my $key (keys %$old) {
+	if (exists $new->{$key} && $old->{$key} eq $new->{$key}) {
+		delete $old->{$key};
+		delete $new->{$key};
+	}
+}
+
+# compare
+for my $key (keys %$old) {
+	if (! exists $new->{$key}) {
+		print $key . ' = -' . $old->{$key} . "\n";
+	}
+}
+
+for my $key (keys %$old) {
+	if (exists $new->{$key}) {
+		print $key . ' = -' . $old->{$key};
+		print ' +' . $new->{$key};
+		print "\n";
+	}
+}
+
+for my $key (keys %$new) {
+	if (! exists $old->{$key}) {
+		print $key . ' = +' . $new->{$key} . "\n";
+	}
+}
+
+
+sub get_config
+{
+	my $file = shift;
+	my %config;
+	while (<$file>) {
+		next if m/^(#|$)/;
+		chomp;
+		my ($key, $value) = split('=', $_);
+		$config{$key} = $value;
+	}
+	return \%config;
+}
+
+sub dump_config
+{
+	my $conf = shift;
+	my $filename = shift;
+	print "# Settings in $filename\n";
+	for my $key (keys %$conf) {
+		print $key.'='.$conf->{$key}."\n";
+	}
+}

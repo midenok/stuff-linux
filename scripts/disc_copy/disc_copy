@@ -1,0 +1,100 @@
+#!/bin/bash
+# export LANG=ru_RU.koi8-r
+export DISC_DEV="$1"
+export DISC_PATH="$2"
+export DEST_PATH="$3"
+export DISC_LABEL="$4"
+export UDI="$5"
+
+TEST_FILE="$DEST_PATH/disc_storage"
+
+
+while [ -z "$DISC_PATH" ]
+do
+    echo "hal.volume.mount_point is empty. Waiting..."
+    sleep 1
+    DISC_PATH=$(hal-get-property --udi "$UDI" --key volume.mount_point)
+done
+
+while [ ! -f "$TEST_FILE" ]
+do
+    echo "No disc storage found. Waiting..."
+    sleep 2
+done
+
+
+while ! mountpoint "$DISC_PATH"
+do
+    echo "Disc not yet mounted. Waiting..."
+    sleep 1
+done
+
+DISC_NUM=$(ls -1 $DEST_PATH | sort -n | tail -n 1)
+DISC_NUM=$((DISC_NUM + 1))
+
+echo "Copying DISC_DEV=$DISC_DEV DISC_PATH=$DISC_PATH DEST_PATH=$DEST_PATH DISC_LABEL=$DISC_LABEL"
+
+mkdir "$DEST_PATH/$DISC_NUM" || exit $?
+
+run_rsync()
+{
+    # TODO: detect ext/fat fs and choose correct opts
+    # rsync_opts="-a --progress --chmod Dug=rwx,Do=rx,Fug=rw,Fo=r"
+    rsync_opts="-rt --progress"
+    cmd=r
+    while [ "$cmd" = "r" ]
+    do
+	cmd=q
+	if ! rsync $rsync_opts  "$1" "$2/"
+	then
+	    echo 'Error occured! Retry/Continue/Quit/Delete (r/c/q/d)?'
+	    read cmd
+	    if [ "$cmd" = "d" ]
+	    then
+		rm -rf "$2"
+	    fi
+	else
+	    cmd=c
+	fi
+	
+	if [ "$cmd" = "c" ]
+	then
+	    sudo umount "$DISC_PATH"
+	    sudo eject "$DISC_DEV"
+	fi
+    done
+}
+
+run_readom()
+{
+    cmd=r
+    while [ "$cmd" = "r" ]
+    do
+	cmd=q
+	if ! readom "dev=$1" "f=$2/disk.iso"
+	then
+	    echo 'Error occured! (r)etry/(q)uit/(d)elete all/delete (f)ile?'
+	    read cmd
+	    case "$cmd" in
+	    d)	rm -rf "$2"
+		;;
+	    f)  rm -f "$2/disk.iso"
+		;;
+	    esac
+	else
+	    sudo eject $1
+	fi
+    done
+}
+
+export -f run_rsync
+export -f run_readom
+
+konsole -T "Copying '$DISC_PATH' to '$DEST_PATH/$DISC_NUM' ($DISC_LABEL)" -e bash -c "run_rsync \"$DISC_PATH/\" \"$DEST_PATH/$DISC_NUM\"" &
+# sudo umount /dev/scd0 
+#konsole -T "Copying '$DISC_PATH' to '$DEST_PATH/$DISC_NUM' ($DISC_LABEL)" -e bash -c "run_readom \"$DISC_DEV\" \"$DEST_PATH/$DISC_NUM\"" &
+
+COPY_PID=$!
+#cd "$DEST_PATH"
+#kmdr-executor /home/sigil/scripts/disc_copy/disc_copy.kmdr "$DISC_NUM" "$DISC_LABEL" "$DEST_PATH" &
+wait $COPY_PID

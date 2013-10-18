@@ -1,0 +1,9 @@
+#!/bin/sh
+
+while true
+do
+    sudo mount /dev/cdrom1 /mnt &&
+        break
+    sleep 1
+done
+./disc_copy /dev/cdrom1 /mnt /media/disk/discs

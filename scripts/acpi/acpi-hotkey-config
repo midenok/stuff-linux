@@ -1,0 +1,9 @@
+#!/bin/sh
+EVENT_CONFIG='/proc/acpi/hotkey/event_config'
+[ -f $EVENT_CONFIG ] || { echo "Generic hotkey driver is not loaded!"; exit 1; }
+echo '0:_SB::_SB.LID:_PSW:2864:136' > $EVENT_CONFIG
+echo '0:_SB::_SB.LID:_PSW:22:137' > $EVENT_CONFIG
+echo '0:_SB::_SB.LID:_PSW:30:138' > $EVENT_CONFIG
+
+cat $EVENT_CONFIG
+#echo -n '1:::::2864:136' > /proc/acpi/hotkey/event_config

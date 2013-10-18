@@ -1,0 +1,19 @@
+#!/bin/bash
+
+indir=/media/dvd
+
+while true
+do
+    echo -n "Type dir name: "
+    read
+    outdir="/media/storage0/music/from_discs/$REPLY"
+
+    while ! mount|grep -q /dev/sr0
+    do
+        sleep 1
+    done
+
+    mkdir $outdir || exit $?
+    rsync -aP "$indir/" "$outdir/"
+    sudo eject
+done

@@ -1,0 +1,5 @@
+set bell-style visible
+set history-preserve-point on
+set convert-meta off
+set input-meta on
+set output-meta on

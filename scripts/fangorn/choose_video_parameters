@@ -1,0 +1,2618 @@
+#!/usr/bin/perl
+#
+# choose_video_parameters
+#
+# shamelessly copied from h264enc ;-)
+# as I don't have much experience with x264 encoding profiles
+# I would like to thank the Author(s) of h264enc.
+#
+# This is a extra program because I use it in several scripts. 
+#
+# I just added interfaces necessary to be called by my scripts 
+# and some specialized functions to calculate geometries and check video bitrates.. 
+#
+# All the gratitude for collecting and supporting the presets belongs to the original author(s) of h264enc. 
+# I hope someone else will find this useful.
+# 
+# The interaction with this script works through output files that are interpreted by the calling script. 
+# To see an example how this works, see menc, riptoh264 or blu2mkv scripts.  
+#
+# Author: fangorn (at forums.gentoo.org)
+#         Thanks to the author(s) of h264enc
+#
+# Licence: GPL either version 2 of the License, or (at your option) any later version.
+# use at your own risk, no warranties.
+# 
+# Requests: These all are features that I use on a regular basis. If you can think of another cool feature, 
+#           don't hesitate to contact me. Also you can look for updated versions at 
+#           http://forums.gentoo.org/viewtopic-t-744041-start-0-postdays-0-postorder-asc-highlight-.html 
+# 
+# Requirements: In theory this program should run on every standard Perl installation on any operating system.
+#               It is developed and tested on Linux though. 
+#
+# Dependencies: Nothing
+# 
+# Changelog: 
+#    06.02.2010 added support for processing geometries and expansion sets depending on input and output geometry,
+#                  comparing source video geometry with user or preset speci}ed output video geometries and output 
+#                  of mencoder -vf }lterchain to scale/expand video if necessary
+#               added support to check video $opt->{bitrate} against preset limits
+#               fixed a bug where a wrong begin of the optionslist stops encoding
+#               fixed a bug that speci}ed $vbv_maxrate and $vbv_bufsize get overwritten by presets. Now the smaller one is used.
+#    10.02.2010 on second thought it seems more logic to set $vbv_maxrate to the maximum $opt->{bitrate} and limit average $opt->{bitrate} to something smaller
+#               by default we use 2/3rds of the maximum now. The maximum is printed to the command line, so you can correct this by hand
+#    13.03.2010 reimplemented the script in perl, effectively removing all dependencies. Should now run on any box that has Perl.
+#               renamed to "choose_video_parameters", as it is no longer a tool only for x264 profiles
+#    16.06.2010 fixed a bug in expand video option
+#    10.08.2010 fixed a bug in video parameter processing          
+#    03.07.2011 minor changes to support file names containing whitespace and other non-filename
+#               new order of parameters in choose_video_parameters, you need to use following versions of the other tools
+#                   menc                     3.1.0 or newer
+#                   riptoh264                2.1.0 or newer
+#                   blu2mkv                  1.1.0 or newer
+#                   avi2mkv                  2.2.0 or newer
+#                   toolbox_fangorn          0.3.4 or newer
+#                   choose_video_parameters  0.2.6 or newer
+#    28.08.2011 updated x264 profiles
+#               added x264 presets
+#               tested working under windows
+#
+# Here is the original header of h264enc
+############################################################################
+# $Id: h264enc, v 9.1.0, 2009/11/09, gn Exp $
+# UUID: 099ef3da-dc34-41bd-a488-5786f78ab95b
+#
+# Encode DVDs/video }les to the H.264/AVC/MPEG-4 Part 10/JVT/H26L
+# video format using MEncoder from MPlayer
+#
+# Copyright (C) 2006-2009, Grozdan Nikolov
+#
+# h264enc is free software ; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation ; either version 2 of the License, or
+# (at your option) any later version.
+#
+# h264enc is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY ; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program ; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+############################################################################
+
+use warnings; 
+use strict; 
+use feature 'switch';
+use Cwd;
+use Data::Dumper;
+$Data::Dumper::Purity = 1;
+
+# Default values
+my $Versionnumber = "0.3.0";
+
+my $outputfile="choose_x264_encoding_parameters.sh_log";
+my $maxwidth=1920;
+my $maxheight=1080;
+my $x264opt = {
+    bitrate => "",
+    me => "",
+    me_range => "",
+    dct_decimate => "",
+    interlaced => "",
+    a8x8dct => "",
+    fast_pskip => "",
+    trellis => "",
+    scenecut => "",
+    chroma_qp_offset => "",
+    nr => "",
+    ip_factor => "",
+    pb_factor => "",
+    cplx_blur => "",
+    qblur => "",
+    qcomp => "",
+    slices => "",
+    slice_max_size => "",
+    slice_max_mbs => "",
+    partitions => "",
+    mixed_refs => "",
+    qp_min => "",
+    qp_max => "",
+    qp_step => "",
+    keyint => "",
+    keyint_min => "",
+    psy_rd => "",
+    nopsy => "",
+    frameref => "",
+    bframes => "",
+    b_adapt => "",
+    b_bias => "",
+    b_pyramid => "",
+    weight_b => "",
+    weightp => "",
+    direct_pred => "",
+    subq => "",
+    mbtree => "",
+    rc_lookahead => "",
+    sync_lookahead => "",
+    constrained_intra => "",
+    chroma_me => "",
+    cabac => "",
+    aud => "",
+    nal_hrd => "",
+    aq_strength => "",
+    aq_mode => "",
+    deblock => "",
+    stats => "",
+    ratetol => "",
+    vbv_init => "",
+    cqm => "",
+    deadzone_inter => "",
+    deadzone_intra => "",
+    global_header => "",
+    level_idc => "",
+    vbv_maxrate => "" ,
+    vbv_bufsize => "" ,
+};
+
+my $opt = {
+    outputfile => "",
+    profile_list => 0,
+    level => "4.1",
+    FPS => "",
+    targetwidth => 0,
+    targetheight => 0,
+    CROP => "",
+    expandvideo => "no",
+    doscale => "",
+    targetwidth => 0,
+    targetheight => 0,
+    targetaspect => 0,
+    sourcewidth => 0,
+    sourceheight => 0,
+    sourceaspect => 0,
+    bitrate => 0,
+    maxrate => 0,
+    bufsize => 0,
+};
+
+sub init ()
+{
+    use Getopt::Long qw(:config no_ignore_case bundling);
+    GetOptions( "help|h"             => sub {$opt->{help} = 1;}, 
+	"debug|d"            => sub {$opt->{debug} = 1;}, 
+	"profile_list|L"     => sub {$opt->{profile_list} = 1;}, 
+	"level|l=s"          => sub {$opt->{level} = $_[1];},
+	"profile|p=s"        => sub {$opt->{profile} = $_[1];},
+	"targetwidth|w=i"    => sub {$opt->{targetwidth} = $_[1];
+	    if ($opt->{targetwidth} < 1300) {
+		$maxheight = 720;
+		$maxwidth = 1280;
+	    }
+	},
+	"targetheight|h=i"   => sub {$opt->{targetheight} = $_[1];},
+	"sourcewidth|W=i"    => sub {$opt->{sourcewidth} = $_[1];},
+	"sourceheight|H=i"   => sub {$opt->{sourceheight} = $_[1];},
+	"CROP|c=s"           => sub {$opt->{CROP} = $_[1];},
+	"maxrate|r=i"        => sub {$opt->{maxrate} = $_[1];},
+	"bufsize|b=i"        => sub {$opt->{bufsize} = $_[1];},
+	"outputfile|o=s"     => sub {$opt->{outputfile} = $_[1];},
+	"FPS|f=s"            => sub {$opt->{FPS} = $_[1];},
+	"bitrate|B=i"        => sub {$opt->{bitrate} = $_[1];},
+	"expandvideo|e"      => sub {$opt->{expandvideo} = "yes";},
+    );
+    helptext() if defined $opt->{help};
+    $opt->{outputfile} = join (' ', @ARGV) if (@ARGV);
+    print STDERR "choosevideoparameter output file is " . $opt->{outputfile} . "\n" if $opt->{debug};
+}
+
+sub profile_list ()
+{
+    print STDOUT "            Use a predefined H.264 quality preset. You can\n";
+    print STDOUT "            choose from 61 different presets:\n";
+    print STDOUT "\n";
+    print STDOUT "            PC Presets\n";
+    print STDOUT "            ~~~~~~~~~~\n";
+    print STDOUT "            ulq -------> Ultra Low Quality preset\n";
+    print STDOUT "            elq -------> Extreme Low Quality preset\n";
+    print STDOUT "            vlq -------> Very Low Quality preset\n";
+    print STDOUT "            lq --------> Low Quality preset\n";
+    print STDOUT "            mq --------> Medium Quality preset\n";
+    print STDOUT "            nq --------> Normal Quality preset\n";
+    print STDOUT '            hq --------> High Quality preset (recommended)' . "\n";
+    print STDOUT '            vhq -------> Very High Quality preset (recommended)' . "\n";
+    print STDOUT '            ehq -------> Extreme High Quality preset (recommended)' . "\n";
+    print STDOUT "            uhq -------> Ultra High Quality preset\n";
+    print STDOUT "            ihq -------> Insane High Quality preset\n";
+    print STDOUT "            nlq -------> Near Lossless Quality preset\n";
+    print STDOUT "            fghq ------> Film Grain optimized High Quality preset\n";
+    print STDOUT "            ani -------> Anime preset\n";
+    print STDOUT "            anihq -----> Anime High Quality preset\n";
+    print STDOUT '            vdhq ------> VDPAU/DXVA High Quality (High@L4.1) preset' . "\n";
+    print STDOUT '            vdehq -----> VDPAU/DXVA Extreme High Quality (High@L4.1) preset' . "\n";
+    print STDOUT '            vdihq -----> VDPAU/DXVA Insane High Quality (High@L4.1) preset' . "\n";
+    print STDOUT "\n";
+    print STDOUT "            Software Compatible Presets\n";
+    print STDOUT "            ~~~~~~~~~~~~~~~~~~~~~~~~~~~\n";
+    print STDOUT "            fl --------> Flash Player preset\n";
+    print STDOUT "            flhq ------> Flash Player High Quality preset\n";
+    print STDOUT "            qt --------> QuickTime preset\n";
+    print STDOUT "            qthq ------> QuickTime High Quality preset\n";
+    print STDOUT "\n";
+    print STDOUT "            Device Presets\n";
+    print STDOUT "            ~~~~~~~~~~~~~~\n";
+    print STDOUT '            bd40 ------> Blu-ray (Main@L4.0) preset' . "\n";
+    print STDOUT '            bdhq40 ----> Blu-ray High Quality (High@L4.0) preset' . "\n";
+    print STDOUT '            bd41 ------> Blu-ray (Main@L4.1) preset' . "\n";
+    print STDOUT '            bdhq41 ----> Blu-ray High Quality (High@L4.1) preset' . "\n";
+    print STDOUT '            avchd -----> AVCHD (Main@L4.0) preset' . "\n";
+    print STDOUT '            avchdhq ---> AVCHD High Quality (High@L4.1) preset' . "\n";
+    print STDOUT '            sdb -------> Stand-alone HW players SD (Baseline@L3.0) preset' . "\n";
+    print STDOUT '            sdm -------> Stand-alone HW players SD (Main@L3.0) preset' . "\n";
+    print STDOUT '            sdh -------> Stand-alone HW players SD (High@L3.0) preset' . "\n";
+    print STDOUT '            hdb -------> Stand-alone HW players HD (Baseline@L4.0) preset' . "\n";
+    print STDOUT '            hdm -------> Stand-alone HW players HD (Main@L4.0) preset' . "\n";
+    print STDOUT '            hdh -------> Stand-alone HW players HD (High@L4.0) preset' . "\n";
+    print STDOUT '            ag1 -------> Android G1 preset' . "\n";
+    print STDOUT "            ag1hq -----> Android G1 High Quality preset\n";
+    print STDOUT "            ipc -------> Apple iPod Classic preset\n";
+    print STDOUT "            ipchq -----> Apple iPod Classic High Quality preset\n";
+    print STDOUT "            ip --------> Apple iPod preset\n";
+    print STDOUT "            iphq ------> Apple iPod High Quality preset\n";
+    print STDOUT "            iph -------> Apple iPhone preset\n";
+    print STDOUT "            iphhq -----> Apple iPhone High Quality preset\n";
+    print STDOUT "            atv -------> AppleTV preset\n";
+    print STDOUT "            atvhq -----> AppleTV High Quality preset\n";
+    print STDOUT "            ar --------> Archos 605 preset\n";
+    print STDOUT "            arhq ------> Archos 605 High Quality preset\n";
+    print STDOUT "            ar5 -------> Archos 5 preset\n";
+    print STDOUT "            ar5hq -----> Archos 5 High Quality preset\n";
+    print STDOUT "            bb --------> Blackberry Bold 9000 preset\n";
+    print STDOUT "            bbhq ------> Blackberry Bold 9000 High Quality preset\n";
+    print STDOUT "            nks60 -----> Nokia S60 preset\n";
+    print STDOUT "            nks60hq ---> Nokia S60 High Quality preset\n";
+    print STDOUT "            psp -------> Sony PSP preset\n";
+    print STDOUT "            psphq -----> Sony PSP High Quality preset\n";
+    print STDOUT "            ps3 -------> Sony PS3 preset\n";
+    print STDOUT "            ps3hq -----> Sony PS3 High Quality preset\n";
+    print STDOUT "            mz --------> Microsoft Zune preset\n";
+    print STDOUT "            mzhq ------> Microsoft Zune High Quality preset\n";
+    print STDOUT "            mx --------> Microsoft XBOX 360 preset\n";
+    print STDOUT "            mxhq ------> Microsoft XBOX 360 High Quality preset\n";
+    print STDOUT "            htm -------> HTC Magic\n";
+    print STDOUT "\n";
+    print STDOUT "            X264 Presets\n";
+    print STDOUT "            ~~~~~~~~~~~~~~\n";
+    print STDOUT "            ultrafast -> x264 ultrafast preset\n";
+    print STDOUT "            superfast -> x264 superfast preset\n";
+    print STDOUT "            veryfast --> x264 veryfast preset\n";
+    print STDOUT "            faster ----> x264 faster preset\n";
+    print STDOUT "            fast ------> x264 fast preset\n";
+    print STDOUT "            medium ----> x264 medium preset\n";
+    print STDOUT "            slow ------> x264 slow preset\n";
+    print STDOUT "            slower ----> x264 slower preset\n";
+    print STDOUT "            veryslow --> x264 veryslow preset\n";
+    print STDOUT "            placebo ---> x264 placebo preset\n";
+    print STDOUT "\n"
+}
+
+sub helptext ()
+{
+    print STDERR << "EOF";
+    $0 Version $Versionnumber
+
+Program to choose x264 encoding presets.
+
+Usage: $0 -p <preset>  -W <sourcewidth> -H <sourceheight> -f <fps> -o <output}le> -B <bitrate>
+		[-eL] [-c <CROPparameters>] [-w <outputwidth>] [-h <outputheight>] 
+		[-l <level>] [-b <max_bufsize>] [-r <max_bitrate]  
+
+ -o <output}le>        
+	    specify output}le to log settings (mandatory)
+ -f <fps>
+	    frames per second of source video (mandatory)
+ -p <preset>
+	    x264 encoding preset (mandatory)
+ -W <sourcewidth>
+ -H <sourceheight>
+	    input video width and height (mandatory)       
+ -B <bitrate>
+	    video bitrate (mandatory)
+ -w <outputwidth>
+ -h <outputheight>
+	    output video width and height (optional)
+	    when none of them are given, source video or preset maximum geometry is used
+	    if only one is given, the other is calculated from the given value and the source or target aspect ratio
+	       if -e option is present, black borders are added to reach output aspect ratio
+	    if both are given, these are used
+ -c <CROPparameters>
+	    parameters created by a "mplayer -cropdetect" run (optional)
+ -l <level>
+	    h.264 level [Default: 4.1]
+ -b <max_bufsize>
+	    maximum bufsize for video stream (optional)
+ -r <max_bitrate>
+	    maximum bitrate for video stream (optional)
+ -e         expand video with black borders to match given or demanded aspect ratio (optional) 
+ -L         list available presets and exit (optional)
+
+EOF
+    &profile_list ();
+    exit 0;
+}
+
+sub display_quality_preset_func () 
+{
+    given ($opt->{profile}) {
+	when ("ulq")    { print STDOUT "-> Using \"Ultra Low Quality\" preset\n"};
+	when ("elq")    { print STDOUT "-> Using \"Extreme Low Quality\" preset\n"};
+	when ("vlq")    { print STDOUT "-> Using \"Very Low Quality\" preset\n"};
+	when ("lq")     { print STDOUT "-> Using \"Low Quality\" preset\n"};
+	when ("mq")     { print STDOUT "-> Using \"Medium Quality\" preset\n"};
+	when ("nq")     { print STDOUT "-> Using \"Normal Quality\" preset\n"};
+	when ("hq")     { print STDOUT "-> Using \"High Quality\" preset\n"};
+	when ("vhq")    { print STDOUT "-> Using \"Very High Quality\" preset\n"};
+	when ("ehq")    { print STDOUT "-> Using \"Extreme High Quality\" preset\n"};
+	when ("uhq")    { print STDOUT "-> Using \"Ultra High Quality\" preset\n"};
+	when ("ihq")    { print STDOUT "-> Using \"Insane High Quality\" preset\n"};
+	when ("nlq")    { print STDOUT "-> Using \"Near Lossless Quality\" preset\n"};
+	when ("fghq")   { print STDOUT "-> Using \"Film Grain optimized High Quality\" preset\n"};
+	when ("ani")    { print STDOUT "-> Using \"Anime\" preset\n"};
+	when ("anihq")  { print STDOUT "-> Using \"Anime High Quality\" preset\n"};
+	when ("vdhq")   { print STDOUT "-> Using \"VDPAU/DXVA High Quality (High L4.1)\" preset\n"};
+	when ("vdehq")  { print STDOUT "-> Using \"VDPAU/DXVA Extreme High Quality (High L4.1)\" preset\n"};
+	when ("vdihq")  { print STDOUT "-> Using \"VDPAU/DXVA Insane High Quality (High L4.1)\" preset\n"};
+	when ("fl")     { print STDOUT "-> Using \"Flash Player\" preset\n"};
+	when ("flhq")   { print STDOUT "-> Using \"Flash Player High Quality\" preset\n"};
+	when ("qt")     { print STDOUT "-> Using \"QuickTime\" preset\n"};
+	when ("qthq")   { print STDOUT "-> Using \"QuickTime High Quality\" preset\n"};
+	when ("bd40")   { print STDOUT "-> Using \"Blu-ray (Main L4.0)\" preset\n"};
+	when ("bdhq40") { print STDOUT "-> Using \"Blu-ray High Quality (High L4.0)\" preset\n"};
+	when ("bd41")   { print STDOUT "-> Using \"Blu-ray (Main L4.0)\" preset\n"};
+	when ("bdhq41") { print STDOUT "-> Using \"Blu-ray High Quality (High L4.1)\" preset\n"};
+	when ("avchd")  { print STDOUT "-> Using \"AVCHD (Main L4.0)\" preset\n"};
+	when ("avchdhq"){ print STDOUT "-> Using \"AVCHD High Quality (High L4.1)\" preset\n"};
+	when ("sdb")    { print STDOUT "-> Using \"Stand-alone HW Players SD (Baseline L3.0)\" preset\n"};
+	when ("sdm")    { print STDOUT "-> Using \"Stand-alone HW Players SD (Main L3.0)\" preset\n"};
+	when ("sdh")    { print STDOUT "-> Using \"Stand-alone HW Players SD (High L3.0)\" preset\n"};
+	when ("hdb")    { print STDOUT "-> Using \"Stand-alone HW Players HD (Baseline L4.0)\" preset\n"};
+	when ("hdm")    { print STDOUT "-> Using \"Stand-alone HW Players HD (Main L4.0)\" preset\n"};
+	when ("hdh")    { print STDOUT "-> Using \"Stand-alone HW Players HD (High L4.0)\" preset\n"};
+	when ("ag1")    { print STDOUT "-> Using \"Android G1\" preset\n"};
+	when ("ag1hq")  { print STDOUT "-> Using \"Android G1 High Quality\" preset\n"};
+	when ("ipc")    { print STDOUT "-> Using \"Apple iPod Classic\" preset\n"};
+	when ("ipchq")  { print STDOUT "-> Using \"Apple iPod Classic High Quality\" preset\n"};
+	when ("ip")     { print STDOUT "-> Using \"Apple iPod\" preset\n"};
+	when ("iphq")   { print STDOUT "-> Using \"Apple iPod High Quality\" preset\n"};
+	when ("iph")    { print STDOUT "-> Using \"Apple iPhone\" preset\n"};
+	when ("iphhq")  { print STDOUT "-> Using \"Apple iPhone High Quality\" preset\n"};
+	when ("atv")    { print STDOUT "-> Using \"AppleTV\" preset\n"};
+	when ("atvhq")  { print STDOUT "-> Using \"AppleTV High Quality\" preset\n"};
+	when ("ar")     { print STDOUT "-> Using \"Archos 605\" preset\n"};
+	when ("arhq")   { print STDOUT "-> Using \"Archos 605 High Quality\" preset\n"};
+	when ("ar5")    { print STDOUT "-> Using \"Archos 5\" preset\n"};
+	when ("ar5hq")  { print STDOUT "-> Using \"Archos 5 High Quality\" preset\n"};
+	when ("bb")     { print STDOUT "-> Using \"Blackberry 9000\" preset\n"};
+	when ("bbhq")   { print STDOUT "-> Using \"Blackberry 9000 High Quality\" preset\n"};
+	when ("nks60")  { print STDOUT "-> Using \"Nokia S60\" preset\n"};
+	when ("nks60hq"){ print STDOUT "-> Using \"Nokia S60 High Quality\" preset\n"};
+	when ("psp")    { print STDOUT "-> Using \"Sony PSP\" preset\n"};
+	when ("psphq")  { print STDOUT "-> Using \"Sony PSP High Quality\" preset\n"};
+	when ("ps3")    { print STDOUT "-> Using \"Sony PS3\" preset\n"};
+	when ("ps3hq")  { print STDOUT "-> Using \"Sony PS3 High Quality\" preset\n"};
+	when ("mz")     { print STDOUT "-> Using \"Microsoft Zune\" preset\n"};
+	when ("mzhq")   { print STDOUT "-> Using \"Microsoft Zune High Quality\" preset\n"};
+	when ("mx")     { print STDOUT "-> Using \"Microsoft XBOX 360\" preset\n"};
+	when ("mxhq")   { print STDOUT "-> Using \"Microsoft XBOX 360\" preset\n"};
+	when ("htm")    { print STDOUT "-> Using \"HTC Magic\" preset\n"};
+	when ("ultrafast") { print STDOUT "-> Using \"x264 ultrafast\" preset\n"};
+	when ("superfast") { print STDOUT "-> Using \"x264 superfast\" preset\n"};
+	when ("veryfast")  { print STDOUT "-> Using \"x264 veryfast\" preset\n"};
+	when ("faster")    { print STDOUT "-> Using \"x264 faster\" preset\n"};
+	when ("fast")      { print STDOUT "-> Using \"x264 fast\" preset\n"};
+	when ("medium")    { print STDOUT "-> Using \"x264 medium\" preset\n"};
+	when ("slow")      { print STDOUT "-> Using \"x264 slow\" preset\n"};
+	when ("slower")    { print STDOUT "-> Using \"x264 slower\" preset\n"};
+	when ("veryslow")  { print STDOUT "-> Using \"x264 veryslow\" preset\n"};
+	when ("placebo")   { print STDOUT "-> Using \"x264 placebo\" preset\n"};
+    }
+}
+
+sub device_resolution_mapping () {
+    my $LOG = shift; 
+    my $geometry = $opt->{targetwidth} . "x" . $opt->{targetheight};
+    given ($opt->{profile}) {
+	when (["fl", "flhq"]) {
+	    print $LOG "-> Valid Flash Player resolutions: unrestricted, up to 1080p (1920x1080)\n" ;
+	    if (( $opt->{targetwidth} > 1920 ) || ( $opt->{targetheight} > 1080 )) { 
+		$opt->{doscale}="yes";
+		$maxwidth=1920;
+		$maxheight=1080;  
+		print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+	    }                                
+	}
+	when (["ag1","ag1hq"]) {
+	    print $LOG "-> Valid Android G1 resolutions: up to 480x368\n" ;
+	    $opt->{doscale}="yes";
+	    $maxwidth=480;
+	    $maxheight=368;
+	    print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+	}
+	when (["ipc","ipchq"]) {
+	    print $LOG "-> Valid iPod Classic resolutions: 320x240\n" ;
+	    $opt->{doscale}="yes";
+	    $maxwidth=480;
+	    $maxheight=368;
+	    print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+	}
+	when (["ip","iphq"]) {
+	    print $LOG "-> Valid iPod resolutions: 320x240|480x320|640x480\n" ;
+	    given ($geometry) { 
+		when ("320x240") { print $LOG "-> resolition o.k.\n" ; }
+		when ("480x320") { print $LOG "-> resolition o.k.\n" ; }
+		when ("640x480") { print $LOG "-> resolition o.k.\n" ; }
+		default {
+		    $opt->{doscale}="yes";
+		    $maxwidth=640;
+		    $maxheight=480;
+		    print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+		}
+	    }
+	}
+	when (["iph","iphhq"]) {
+	    print $LOG "-> Valid iPhone resolutions: 320x240|640x480\n" ;
+	    given ($geometry) { 
+		when ("320x240") { print $LOG "-> resolition o.k.\n" ; }
+		when ("640x480") { print $LOG "-> resolition o.k.\n" ; }
+		default {
+		    $opt->{doscale}="yes";
+		    $maxwidth=640;
+		    $maxheight=480;
+		    print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+		}
+	    }
+	}
+	when (["atv","atvhq"]) {
+	    print $LOG "-> Valid AppleTV resolutions: unrestricted, up to 720p (1280x720)\n" ;
+	    if (( $opt->{targetwidth} > 1280 ) || ( $opt->{targetheight} > 720 )) { 
+		$opt->{doscale}="yes";
+		$maxwidth=1280;
+		$maxheight=720 ; 
+		print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+	    }
+	}                                
+	when (["ar","arhq","ar5","ar5hq"]) { 
+	    print $LOG "-> Valid Archos 605/5 resolutions: up to 720x576\n" ;
+	    if (( $opt->{targetwidth} > 720 ) || ( $opt->{targetheight} > 576 )) { 
+		$opt->{doscale}="yes";
+		$maxwidth=720;
+		$maxheight=576;
+		print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+	    }
+	}                                
+	when (["bb","bbhq"]) {
+	    print $LOG "-> Valid Blackberry 9000 resolutions: 320x240|480x320|640x480\n" ;
+	    given ($geometry) { 
+		when ("320x240") { print $LOG "-> resolition o.k.\n" ; }
+		when ("480x320") { print $LOG "-> resolition o.k.\n" ; }
+		when ("640x480") { print $LOG "-> resolition o.k.\n" ; }
+		default {
+		    $opt->{doscale}="yes";
+		    $maxwidth=640;
+		    $maxheight=480;
+		    print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+		}
+	    }
+	}
+	when (["nks60","nks60hq"]) {
+	    print $LOG "-> Valid Nokia S60 resolutions: 320x240|352x416\n" ;
+	    given ($geometry) { 
+		when ("320x240") { print $LOG "-> resolition o.k.\n" ; }
+		when ("352x416") { print $LOG "-> resolition o.k.\n" ; }
+		default {
+		    $opt->{doscale}="yes";
+		    $maxwidth=352;
+		    $maxheight=416;
+		    print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+		}
+	    }
+	}
+	when (["psp","psphq"]) {
+	    print $LOG "-> Valid Sony PSP resolutions: 320x240|368x208|352x480|480x272|720x480\n" ;
+	    given ($geometry) { 
+		when ("320x240") { print $LOG "-> resolition o.k.\n"; }
+		when ("368x208") { print $LOG "-> resolition o.k.\n"; }
+		when ("352x480") { print $LOG "-> resolition o.k.\n"; }
+		when ("480x272") { print $LOG "-> resolition o.k.\n"; }
+		when ("720x480") { print $LOG "-> resolition o.k.\n"; }
+		default {
+		    $opt->{doscale}="yes";
+		    $maxwidth=720;
+		    $maxheight=480;
+		    print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+		}
+	    }
+	}
+	when (["ps3","ps3hq"]) {
+	    print $LOG "-> Valid Sony PS3 resolutions: unrestricted, up to 1080p (1920x1080)\n" ;
+	    if (( $opt->{targetwidth} > 1920 ) || ( $opt->{targetheight} > 1080 )) { 
+		$opt->{doscale}="yes";
+		$maxwidth=1920;
+		$maxheight=1080;  
+		print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+	    }
+	}                                
+	when (["mz","mzhq"]) {
+	    print $LOG "-> Valid MS Zune resolutions: 320x240|720x480|720x576\n" ;
+	    given ($geometry) { 
+		when ("320x240") { print $LOG "-> resolition o.k.\n"; }
+		when ("720x480") { print $LOG "-> resolition o.k.\n"; }
+		when ("720x576") { print $LOG "-> resolition o.k.\n"; }
+		default {
+		    $opt->{doscale}="yes";
+		    $maxwidth=720;
+		    $maxheight=576;
+		    print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+		}
+	    }
+	}
+	when (["mx","mxhq"]) {
+	    print $LOG "-> Valid XBOX 360 resolutions: unrestricted, up to 1080p (1920x1080)\n" ; 
+	    if (( $opt->{targetwidth} > 1920 ) || ( $opt->{targetheight} > 1080 )) { 
+		$opt->{doscale}="yes";
+		$maxwidth=1920;
+		$maxheight=1080;  
+		print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+	    }                                
+	}
+	when (["bd40","bdhq40","bd41","bdhq41"]) {
+	    print $LOG "-> Valid Blu-ray resolutions: 720i/p (1280x720) and 1080i/p (1920x1080)\n" ;
+	    given ($geometry) { 
+		when ("1280x720") { print $LOG "-> resolition o.k.\n" ; }
+		when ("1920x1080") { print $LOG "-> resolition o.k.\n" ; }
+		default {
+		    $opt->{doscale}="yes";
+		    $maxwidth=1920;
+		    $maxheight=1080;
+		    print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+		}
+	    }
+	}
+	when (["avchd","avchdhq"]) {
+	    print $LOG "-> Valid AVCHD resolutions: 1920x1080, 1440x1080, 1280x720, 720x480, 720x576\n" ;
+	    given ($geometry) { 
+		when ("1920x1080") {print $LOG "-> resolition o.k.\n" ; }
+		when ("1440x1080") {print $LOG "-> resolition o.k.\n" ; }
+		when ("1280x720") {print $LOG "-> resolition o.k.\n" ; }
+		when ("720x480") {print $LOG "-> resolition o.k.\n" ; }
+		when ("720x576") {print $LOG "-> resolition o.k.\n" ; }
+		default {
+		    $opt->{doscale}="yes";
+		    $maxwidth=1920;
+		    $maxheight=1080;
+		    print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+		}
+	    }
+	}
+	when ("htm") {
+	    print $LOG "-> Valid HTC Magic resolutions: 480x352\n" ;
+	    given ($geometry) { 
+		when ("480x352") { print $LOG "-> resolition o.k." ; }
+		default {
+		    $opt->{doscale}="yes";
+		    $maxwidth=480;
+		    $maxheight=352;
+		    print $LOG "-> rescaling to " . $opt->{$maxwidth} . "x" . $maxheight . "\n";
+		}
+	    }
+	}
+    }
+}
+
+sub pre_calculate_geometry ()
+{
+    my $croppedwidth="";
+    my $croppedheight="";
+    my $inaspectheight="";
+    my $inaspectwidth="";
+    my $expandedwidth="";
+    my $expandedheight="";
+
+    if( $opt->{CROP} ) {
+	# overwrite original source geometry with geometry after cropping black borders
+	#$croppedwidth=`print STDOUT "$CROP" | sed -r "s/[-]?([0-9]+):[-]?[0-9]+:[-]?[0-9]+:[-]?[0-9]+/\\1/";
+	#$croppedheight=`print STDOUT "$CROP" | sed -r "s/[-]?[0-9]+:[-]?([0-9]+):[-]?[0-9]+:[-]?[0-9]+/\\1/";
+	$opt->{CROP} =~ /[-]?(\d+):[-]?(\d+):[-]?\d+:[-]?\d+/;
+	($croppedwidth,$croppedheight) = ($1,$2);
+	$opt->{sourceaspect} = $croppedwidth / $croppedheight ;
+	$opt->{sourcewidth} = "$croppedwidth";
+	$opt->{sourceheight} = "$croppedheight";
+    } else {
+	$opt->{sourceaspect} = $opt->{sourcewidth} / $opt->{sourceheight} ;
+    }   
+
+    if (( $opt->{targetwidth} eq "" ) && ( $opt->{targetheight} eq "" )) {
+	# none specified
+	$opt->{targetwidth} = $opt->{sourcewidth};
+	$opt->{targetheight} = $opt->{sourceheight};
+    } elsif (( not $opt->{targetwidth} eq "" ) && ( $opt->{targetheight} eq "" )) {
+	# making sure input is a multiple of 16 (MPEG standard)
+	$expandedwidth=$opt->{sourcewidth} + $opt->{sourcewidth} %16;
+	# calculate target height
+	$inaspectheight=int ( $expandedwidth / $opt->{sourceaspect} );
+	if ( $inaspectheight > $opt->{sourceheight} ) { 
+	    if ( $inaspectheight %16 < 7 ) { 
+		$opt->{targetheight} = $inaspectheight - $inaspectheight %16 ; 
+	    } else { 
+		$opt->{targetheight} = $inaspectheight + ( 16 - $inaspectheight %16 )
+	    }
+	} else { 
+	    $opt->{targetheight} = $opt->{sourceheight} ; 
+	}
+    } elsif ((  $opt->{targetwidth} eq "" ) && ( not $opt->{targetheight} eq "" )) {
+	# making sure input is a multiple of 16 (MPEG standard)
+	$expandedheight=$opt->{sourceheight} + $opt->{sourceheight} %16; 
+	# calculate target width
+	$inaspectwidth=int( $expandedheight * $opt->{sourceaspect} );
+	if ( $inaspectwidth > $opt->{sourcewidth} ) { 
+	    if ( $inaspectwidth %16 < 7 ) { 
+		$opt->{targetwidth} = $inaspectwidth - $inaspectwidth %16 ; 
+	    } else { 
+		$opt->{targetwidth} = $inaspectwidth + ( 16 - $inaspectwidth %16 );
+	    }
+	} else { 
+	    $opt->{targetwidth} = $opt->{sourcewidth} ; 
+	}
+    }
+    $opt->{targetaspect} = $opt->{targetwidth} / $opt->{targetheight} ;
+    $opt->{doscale} = "yes" if ($opt->{targetwidth} < $opt->{sourcewidth}); 
+
+}
+
+sub build_filter_chain ()
+{
+    my $LOG = shift;
+    my $inaspectheight="";
+    my $inaspectwidth="";
+    my $outputwidth="";
+    my $outputheight="";
+    my $SCALE="";
+    my $presetaspect;
+
+    print "scale is " . $opt->{doscale} . "\n" if $opt->{debug};
+    if ( $opt->{doscale} ) {
+	$presetaspect = $maxwidth / $maxheight ;
+	if ($opt->{targetaspect} > $presetaspect ) {
+	    print STDOUT "source is wider than selected output geometry\n";
+	    $outputwidth=$maxwidth;
+	    # calculate target height
+	    $inaspectheight = int ( $maxwidth / $opt->{targetaspect} ) ;
+
+	    if ( $inaspectheight < $maxheight ) { 
+		if ( $inaspectheight %16 < 7 ) { 
+		    $outputheight = $inaspectheight - $inaspectheight %16 ; 
+		} else { 
+		    $outputheight =  $inaspectheight + ( 16 - $inaspectheight %16 );
+		}
+	    } else { 
+		$outputheight =  $maxheight ;
+	    }
+	    print "scaling to $outputwidth:$outputheight\n";
+	} elsif ( $opt->{targetaspect} < $presetaspect ) {
+	    print STDOUT "source is higher than selected output geometry\n";
+	    $outputheight=$maxheight;
+	    # calculate target width
+	    $inaspectwidth = int ( $maxheight * $opt->{targetaspect} ) ;
+	    if ( $inaspectwidth < $maxwidth ) {
+		if ( $inaspectwidth %16 < 7 ) { 
+		    $outputwidth = $inaspectwidth - $inaspectwidth %16 ; 
+		} else {
+		    $outputwidth = $inaspectwidth + ( 16 - $inaspectwidth %16 );
+		}
+	    } else { 
+		$outputwidth = $maxwidth ; 
+	    }
+	    print "scaling to $outputwidth:$outputheight\n";
+	} else {
+	    print STDOUT "exactly matching aspect ratios\n";
+	    $outputwidth=$maxwidth;
+	    $outputheight=$maxheight;
+	}
+	$SCALE="scale=" . $outputwidth . ":" . $outputheight;
+    } else {
+	$outputwidth=$opt->{targetwidth};
+	$outputheight=$opt->{targetheight};      
+    }
+    # add black borders to reach a preset aspect ratio?
+    print "expandvideo is " . $opt->{expandvideo} . "\n" if $opt->{debug};
+    print "SCALE is $SCALE\n" if $opt->{debug};
+    if ( $opt->{expandvideo} eq "yes" ) {    
+	if (( $maxheight > $outputheight ) || ( $maxwidth > $outputheight )) {
+	    if ( $SCALE eq "" ) {
+		$opt->{SCALE} = "expand=" . $maxwidth . ":" . $maxheight;
+	    } else {
+		$opt->{SCALE} = $SCALE . ",expand=" . $maxwidth . ":" . $maxheight;
+	    }
+	}
+    } else {
+	$opt->{SCALE} = $SCALE unless ($SCALE eq "" ); 
+    }
+    if (($opt->{SCALE}) && (not $opt->{SCALE} eq "" )) {
+	print "vf_scale_expandfilter_chain $opt->{SCALE}\n" if $opt->{debug};
+	print $LOG "vf_scale_expandfilter_chain $opt->{SCALE}\n";
+    }
+}
+
+sub bitrate_limit_check ()
+{
+    given ($opt->{profile}) {
+	when ("bd40") {
+	    if ( $opt->{bitrate} > 20000 ) {
+		print STDOUT "-> Blu-ray video $opt->{bitrate} may not exceed 20000 kbps!";
+		$opt->{maxrate}=":vbv_maxrate=20000";
+		$opt->{bitrate}=int ( 20000 / 3 * 2 ) ;
+	    }
+	}
+	when ("bdhq40") {
+	    if ( $opt->{bitrate} > 25000 ) {
+		print STDOUT "-> Blu-ray video $opt->{bitrate} may not exceed 25000 kbps!";
+		$opt->{maxrate}=":vbv_maxrate=25000";
+		$opt->{bitrate}= int ( 25000 / 3 * 2 ) ;
+	    }
+	}
+	when (["bd41","bdhq41"]) {
+	    if ( $opt->{bitrate} > 30000 ) {
+		print STDOUT "-> Blu-ray video $opt->{bitrate} may not exceed 30000 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=30000" ;
+		$opt->{bitrate}=int ( 30000 / 3 * 2 ) ;
+	    }
+	}
+	when (["avchd","avchdhq"]) {
+	    if ( $opt->{bitrate} > 17000 ) {
+		print STDOUT "-> AVCHD $opt->{bitrate} may not exceed 17000 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=17000" ;
+		$opt->{bitrate}=int ( 17000 / 3 * 2 ) ;
+	    }
+	}
+	when (["ag1","ag1hq"]) {
+	    if ( $opt->{bitrate} > 2000 ) {
+		print STDOUT "-> Android G1 video $opt->{bitrate} may not exceed 2000 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=2000" ;
+		$opt->{bitrate}=int ( 2000 / 3 * 2 )  ;
+	    }
+	}
+	when (["ipc","ipchq"]) {
+	    if ( $opt->{bitrate} > 768 ) {
+		print STDOUT "" ;
+		print STDOUT "-> iPod Classic $opt->{bitrate} may not exceed 768 kbps!" ;
+		print STDOUT "-> Falling back to maximum allowed $opt->{bitrate}!" ;
+		$opt->{maxrate}=":vbv_maxrate=768" ;
+		$opt->{bitrate}=int ( 768 / 3 * 2 ) ;
+	    }
+	}
+	when (["ip","iphq","mz","mzhq"]) {
+	    if ( $opt->{bitrate} > 2500 ) {
+		print STDOUT "-> iPod/Zune video $opt->{bitrate} may not exceed 2500 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=2500" ;
+		$opt->{bitrate}=int ( 2500 / 3 * 2 ) ;
+	    }
+	}
+	when (["iph","iphhq"]) {
+	    if ( $opt->{bitrate} > 1500 ) {
+		print STDOUT "-> iPhone video $opt->{bitrate} may not exceed 1500 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=1500" ;
+		$opt->{bitrate}=int ( 1500 / 3 * 2 ) ;
+	    }
+	}
+	when (["atv","atvhq"]) {
+	    if ( $opt->{bitrate} > 12000 ) {
+		print STDOUT "-> AppleTV video $opt->{bitrate} may not exceed 12000 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=12000" ;
+		$opt->{bitrate}=int ( 12000 / 3 * 2 ) ;
+	    }
+	}
+	when (["ar","arhq"]) {
+	    if ( $opt->{bitrate} > 5000 ) {
+		print STDOUT "-> Archos 605 video $opt->{bitrate} may not exceed 5000 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=5000" ;
+		$opt->{bitrate}=int ( 5000 / 3 * 2 ) ;
+	    }
+	}
+	when (["ar5","ar5hq"]) {
+	    if ( $opt->{bitrate} > 2000 ) {
+		print STDOUT "-> Archos 5 video $opt->{bitrate} may not exceed 2000 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=2000" ;
+		$opt->{bitrate}=int ( 2000 / 3 * 2 ) ;
+	    }
+	}
+	when (["bb","bbhq"]) {
+	    if ( $opt->{bitrate} > 1500 ) {
+		print STDOUT "-> Blackberry 9000 video $opt->{bitrate} may not exceed 1500 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=1500" ;
+		$opt->{bitrate}=int ( 1500 / 3 * 2 ) ;
+	    }
+	}
+	when (["nks60","nks60hq"]) {
+	    if ( $opt->{bitrate} > 384 ) {
+		print STDOUT "" ;
+		print STDOUT "-> Nokia S60 video $opt->{bitrate} may not exceed 384 kbps!" ;
+		print STDOUT "-> Falling back to maximum allowed $opt->{bitrate}!" ;
+		$opt->{maxrate}=":vbv_maxrate=384" ;
+		$opt->{bitrate}=int ( 384 / 6 * 5 ) ;
+	    }
+	}
+	when (["psp","psphq"]) {
+	    if ( $opt->{bitrate} > 4000 ) {
+		print STDOUT "-> PSP video $opt->{bitrate} may not exceed 4000 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=4000" ;
+		$opt->{bitrate}=int ( 4000 / 3 * 2 ) ;
+	    }
+	}
+	when (["ps3,ps3hq"]) {
+	    if ( $opt->{bitrate} > 20000 ) {
+		print STDOUT "-> PS3 video $opt->{bitrate} may not exceed 20000 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=20000" ;
+		$opt->{bitrate}=int ( 20000 / 3 * 2 ) ;
+	    }
+	}
+	when (["mx","mxhq"]) {
+	    if ( $opt->{bitrate} > 20000 ) {
+		print STDOUT "-> XBOX 360 video $opt->{bitrate} may not exceed 20000 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=20000" ;
+		$opt->{bitrate}=int ( 20000 / 3 * 2 ) ;
+	    }
+	}
+	when ("htm") {
+	    if ( $opt->{bitrate} > 512 ) {
+		print STDOUT "-> HTC Magic video $opt->{bitrate} may not exceed 512 kbps!" ;
+		$opt->{maxrate}=":vbv_maxrate=512" ;
+		$opt->{bitrate}=int ( 512 / 6 * 5 ) ;
+	    }
+	}
+    }
+}
+
+init ();
+
+#while ( my ($key, $value) = each(%{$opt}) ) {
+#        print "$key => $value\n";
+#    }
+
+
+if ($opt->{profile_list}) {
+    &profile_list ();
+    exit 0;
+}
+
+if ( -f "$opt->{outputfile}" ) {
+    unlink "$opt->{outputfile}";
+}
+
+# opening logfile for write
+open my $LOG, ">", "$opt->{outputfile}" or die "Unable to open $opt->{outputfile}:$!\n";
+
+
+given ($opt->{profile}) {
+    when (["ulq","elq","vlq","lq","mq","nq","hq","vhq","ehq","uhq","ihq","nlq","fghq","ani","anihq","vdhq","vdehq","vdihq","sdb","sdm","sdh","hdb","hdm","hdh","fl","flhq","qt","qthq","bd40","bdhq40","bd41","bdhq41","avchd","avchdhq","ag1","ag1hq","ipc","ipchq","ip","iphq","iph","iphhq","atv","atvhq","ar","arhq","ar5","ar5hq","bb","bbhq","nks60","nks60hq","psp","psphq","ps3","ps3hq","mz","mzhq","mx","mxhq","htm"]) {
+	&display_quality_preset_func ($LOG);
+    } default {
+	print STDOUT "-> Unknown preset\n";
+	&helptext ();
+	exit 1;
+    }
+}
+
+if ( not $opt->{bitrate} eq "" ) { 
+    &bitrate_limit_check ( $LOG );
+}
+
+given ($opt->{FPS}) {
+    when ($_ <=  5.0) { $x264opt->{keyint} = 50; }
+    when ($_ <= 10.0) { $x264opt->{keyint} = 100; }
+    when ($_ <= 12.0) { $x264opt->{keyint} = 120; }
+    when ($_ <= 15.0) { $x264opt->{keyint} = 150; }
+    when ($_ <= 16.0) { $x264opt->{keyint} = 160; }
+    when ($_ <= 18.0) { $x264opt->{keyint} = 180; }
+    when ($_ <= 24.0) { $x264opt->{keyint} = 240; }
+    when ($_ <= 25.0) { $x264opt->{keyint} = 250; }
+    when ($_ <= 30.0) { $x264opt->{keyint} = 300; }
+    when ($_ <= 50.0) { $x264opt->{keyint} = 500; }
+    when ($_ <= 60.0) { $x264opt->{keyint} = 600; }
+    when ($_ <= 100.0) {$x264opt->{keyint} = 1000; }
+    when ($_ <= 120.0) {$x264opt->{keyint} = 1200; }
+    default {              $x264opt->{keyint} = 250; }
+}
+
+$x264opt->{keyint_min} = ":keyint_min=" . int ($x264opt->{keyint} /10);
+$x264opt->{keyint} = ":keyint=" . $x264opt->{keyint};
+#keyint2=$(($(print STDOUT $keyint | sed 's/:keyint=//')/10))
+#keyint_min=":keyint_min=$(($(print STDOUT $keyint | awk -F= '{print $2}')/10))"
+
+my $h264level;
+
+given ($opt->{level}) {
+    when ([1.0,1.1,1.2,1.3,2.0,2.1,2.2,3.0,3.1,3.2,4.0,4.1,4.2,5.0,5.1]) {
+	$opt->{level} =~ /(\d)\.(\d)/;
+	$opt->{level} = $1 . $2;
+	$h264level = ":level_idc=" . $opt->{level};
+    }
+    default {
+	print STDOUT "-> Unknown H.264 level: $opt->{level}";
+	print STDOUT "-> Valid levels: 1.0, 1.1, 1.2, 1.3, 2.0, 2.1, 2.2, 3.0";
+	print STDOUT "                 3.1, 3.2, 4.0, 4.1, 4.2, 5.0, 5.1, auto";
+	print STDOUT "-> Falling back to level 4.1"; 
+	$h264level = ":level_idc=41";
+    }
+}
+
+given ($opt->{profile}) {
+
+    when ("ulq") {
+	# Ultra Low Quality
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=0";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{me} = ":me=dia";
+	$x264opt->{subq} = ":subq=1";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{chroma_me} = ":nochroma_me";
+	$x264opt->{trellis} = ":trellis=0";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{deblock} = ":nodeblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{partitions} = ":partitions=none";
+	$x264opt->{fast_pskip} = ":fast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("elq") {
+	# Extreme Low Quality
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{me} = ":me=dia";
+	$x264opt->{subq} = ":subq=2";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{chroma_me} = ":nochroma_me";
+	$x264opt->{trellis} = ":trellis=0";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{deblock} = ":nodeblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{partitions} = ":partitions=none";
+	$x264opt->{fast_pskip} = ":fast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("vlq") {
+	# Very Low Quality
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=4";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{me} = ":me=dia";
+	$x264opt->{subq} = ":subq=3";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{chroma_me} = ":nochroma_me";
+	$x264opt->{trellis} = ":trellis=0";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("lq") {
+	# Low Quality
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=2";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=6";
+	$x264opt->{b_adapt} = ":b_adapt=1";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=spatial";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{me} = ":me=dia";
+	$x264opt->{subq} = ":subq=4";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{chroma_me} = ":nochroma_me";
+	$x264opt->{trellis} = ":trellis=0";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("mq") {
+	# Medium Quality
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=2";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=8";
+	$x264opt->{b_adapt} = ":b_adapt=1";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=spatial";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{subq} = ":subq=5";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{chroma_me} = ":nochroma_me";
+	$x264opt->{trellis} = ":trellis=0";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("nq") {
+	# Normal Quality
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=10";
+	$x264opt->{b_adapt} = ":b_adapt=1";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=1";
+	$x264opt->{direct_pred} = ":direct_pred=spatial";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("hq") {
+	# High Quality - from here till IHQ
+	# it's High profile
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=4";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=1";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=16";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("vhq") {
+	# Very High Quality
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=4";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=5";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=8";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("ehq") {
+	# Extreme High Quality
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=5";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=6";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=32";
+	$x264opt->{subq} = ":subq=9";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{rc_lookahead} = ":rc_lookahead=50";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("uhq") {
+	# Ultra High Quality
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=6";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=7";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=esa";
+	$x264opt->{me_range} = ":me_range=48";
+	$x264opt->{subq} = ":subq=10";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{rc_lookahead} = ":rc_lookahead=60";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=2";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("ihq") {
+	# Insane High Quality
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=10";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=7";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=tesa";
+	$x264opt->{me_range} = ":me_range=64";
+	$x264opt->{subq} = ":subq=11";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{rc_lookahead} = ":rc_lookahead=70";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=2";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{partitions} = ":partitions=all";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("nlq") {
+	# Near Lossless Quality
+	$x264opt->{$opt->{bitrate}} = "crf=15";
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=1";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("fghq") {
+	# film Grain optimized High Quality
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=4";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=5";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{aq_strength} = ":aq_strength=0.5";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=1.0,0.25";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=0";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock=-2,-2";
+	$x264opt->{ip_factor} = ":ip_factor=1.1";
+	$x264opt->{pb_factor} = ":pb_factor=1.1";
+	$x264opt->{deadzone_intra} = ":deadzone_intra=6";
+	$x264opt->{deadzone_inter} = ":deadzone_inter=6";
+	$x264opt->{qcomp} = ":qcomp=0.8";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("ani") {
+	# Anime
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=8";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=5";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=1";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{me_range} = ":me_range=16";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.3,0.0";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{aq_strength} = ":aq_strength=0.5";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("anihq") {
+	# Anime High-Quality
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=10";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=5";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.3,0.0";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{aq_strength} = ":aq_strength=0.5";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = "$h264level";
+    }
+    when ("vdhq") {
+	# VDPAU/DXVA HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=4";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=1";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=50000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=50000";
+    }
+    when ("vdehq") {
+	# VDPAU/DXVA EHQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=4";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=8";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=2";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=5000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=5000";
+    }
+    when ("vdihq") {
+	# VDPAU/DXVA IHQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=4";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=tesa";
+	$x264opt->{me_range} = ":me_range=32";
+	$x264opt->{subq} = ":subq=9";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=2";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=5000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=5000";
+    }
+    when ("fl") {
+	# Flash Player
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=2";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=1";
+	$x264opt->{direct_pred} = ":direct_pred=spatial";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{me_range} = ":me_range=16";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+    }
+    when ("flhq") {
+	# Flash Player HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=6";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+    }
+    when ("qt") {
+	# QuickTime
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=1";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{me_range} = ":me_range=16";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+    }
+    when ("qthq") {
+	# QuickTime HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+    }
+    when ("bd40") {
+	# For strict compliancy with BD hardware players
+	# we have to use access unit delimiters, NAL HRD
+	# signaling, one second keyframe interval and
+	# four slices
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=strict";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{me_range} = ":me_range=16";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{slices} = ":slices=4";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=40";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=20000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=20000";
+	$x264opt->{keyint_min} = ":keyint_min=2";
+	$x264opt->{nal_hrd} = ":nal_hrd";
+	$x264opt->{aud} = ":aud";
+    }
+    when ("bdhq40") {
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=strict";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{slices} = ":slices=4";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=40";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=25000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=20000";
+	$x264opt->{keyint_min} = ":keyint_min=2";
+	$x264opt->{nal_hrd} = ":nal_hrd";
+	$x264opt->{aud} = ":aud";
+    }
+    when ("bd41") {
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=strict";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{me_range} = ":me_range=16";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{slices} = ":slices=4";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=30000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=30000";
+	$x264opt->{keyint_min} = ":keyint_min=2";
+	$x264opt->{nal_hrd} = ":nal_hrd=vbr";
+	$x264opt->{aud} = ":aud";
+    }
+    when ("bdhq41") {
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=strict";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{slices} = ":slices=4";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=30000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=30000";
+	$x264opt->{keyint_min} = ":keyint_min=2";
+	$x264opt->{nal_hrd} = ":nal_hrd=vbr";
+	$x264opt->{aud} = ":aud";
+    }
+    when ("avchd") {
+	# AVCHD
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=strict";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{slices} = ":slices=4";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=40";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=17000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=16000";
+	$x264opt->{keyint_min} = ":keyint_min=2";
+	$x264opt->{nal_hrd} = ":nal_hrd=vbr";
+	$x264opt->{aud} = ":aud";
+    }
+    when ("avchdhq") {
+	# AVCHD HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=strict";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=2";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{slices} = ":slices=4";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=17000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=16000";
+	$x264opt->{keyint_min} = ":keyint_min=2";
+	$x264opt->{nal_hrd} = ":nal_hrd=vbr";
+	$x264opt->{aud} = ":aud";
+    }
+    when (["sdb","hdb"]) {
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=strict";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=0";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{aud} = ":aud";
+	given ($opt->{profile}) {
+	    when ("sdb") {
+		$x264opt->{level_idc} = ":level_idc=30";
+		$x264opt->{vbv_maxrate} = ":vbv_maxrate=10000";
+		$x264opt->{vbv_bufsize} = ":vbv_bufsize=5000";
+	    }
+	    when ("hdb") {
+		$x264opt->{level_idc} = ":level_idc=40";
+		$x264opt->{vbv_maxrate} = ":vbv_maxrate=20000";
+		$x264opt->{vbv_bufsize} = ":vbv_bufsize=14475";
+	    }
+	}
+    }
+    when (["sdm","sdh","hdm","hdh"]) {
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=strict";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{aud} = ":aud";
+	given ($opt->{profile}) {
+	    when ("sdm") {
+		$x264opt->{a8x8dct} = ":no8x8dct";
+		$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+		$x264opt->{level_idc} = ":level_idc=30";
+		$x264opt->{vbv_maxrate} = ":vbv_maxrate=10000";
+		$x264opt->{vbv_bufsize} = ":vbv_bufsize=5000";
+	    }
+	    when ("sdh") {
+		$x264opt->{a8x8dct} = ":8x8dct";
+		$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+		$x264opt->{level_idc} = ":level_idc=30";
+		$x264opt->{vbv_maxrate} = ":vbv_maxrate=12500";
+		$x264opt->{vbv_bufsize} = ":vbv_bufsize=5000";
+	    }
+	    when ("hdm") {
+		$x264opt->{a8x8dct} = ":no8x8dct";
+		$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+		$x264opt->{level_idc} = ":level_idc=40";
+		$x264opt->{vbv_maxrate} = ":vbv_maxrate=20000";
+		$x264opt->{vbv_bufsize} = ":vbv_bufsize=14475";
+	    }
+	    when ("hdh") {
+		$x264opt->{a8x8dct} = ":8x8dct";
+		$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+		$x264opt->{level_idc} = ":level_idc=40";
+		$x264opt->{vbv_maxrate} = ":vbv_maxrate=25000";
+		$x264opt->{vbv_bufsize} = ":vbv_bufsize=14475";
+	    }
+	}
+    }
+    when ("ag1") {
+	# Android G1
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=0";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":fast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{level_idc} = ":level_idc=30";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=2000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=2000";
+    }
+    when ("ag1hq") {
+	# Android G1 HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{subq} = ":subq=8";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=0";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":fast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{level_idc} = ":level_idc=30";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=2000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=2000";
+    }
+    when ("ipc") {
+	# iPod Classic
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=0";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":fast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{level_idc} = ":level_idc=13";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=768";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=500";
+    }
+    when ("ipchq") {
+	# iPod Classic HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{subq} = ":subq=8";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=16";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=0";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{level_idc} = ":level_idc=13";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=768";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=500";
+    }
+    when (["ip","iph"]) {
+	# iPod/iPhone
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":fast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{level_idc} = ":level_idc=30";
+	given ($opt->{profile}) {
+	    when ("ip") {
+		$x264opt->{vbv_maxrate} = ":vbv_maxrate=2500";
+		$x264opt->{vbv_bufsize} = ":vbv_bufsize=2000";
+	    }
+	    when ("iph") {
+		$x264opt->{vbv_maxrate} = ":vbv_maxrate=1500";
+		$x264opt->{vbv_bufsize} = ":vbv_bufsize=1000";
+	    }
+	}
+    }
+    when (["iphq","iphhq"]) {
+	# iPod/iPhone HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{subq} = ":subq=8";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=16";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=2";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	given ($opt->{profile}) {
+	    when ("iphq") {
+	        $x264opt->{level_idc} = ":level_idc=30";
+		$x264opt->{vbv_maxrate} = ":vbv_maxrate=2500";
+		$x264opt->{vbv_bufsize} = ":vbv_bufsize=2000";
+	    }
+	    when ("iphhq") {
+	        $x264opt->{level_idc} = ":level_idc=31";
+		$x264opt->{vbv_maxrate} = ":vbv_maxrate=10000";
+		$x264opt->{vbv_bufsize} = ":vbv_bufsize=10000";
+	    }
+	}
+    }
+    when ("atv") {
+	# AppleTV
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=2";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=0";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{level_idc} = ":level_idc=30";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=12000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=5000";
+    }
+    when ("atvhq") {
+	# AppleTV HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=2";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{level_idc} = ":level_idc=30";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=12000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=5000";
+    }
+    when ("ar") {
+	# Archos 605
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=5000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=3000";
+	$x264opt->{level_idc} = ":level_idc=30";
+    }
+    when ("arhq") {
+	# Archos 605 HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{subq} = ":subq=8";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=2";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=5000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=3000";
+	$x264opt->{level_idc} = ":level_idc=30";
+    }
+    when ("ar5") {
+	# Archos 5
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=2";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=strict";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=1";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=2000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=1700";
+	$x264opt->{level_idc} = ":level_idc=40";
+    }
+    when ("ar5hq") {
+	# Archos 5 HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=4";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=4";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=strict";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=2000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=1700";
+	$x264opt->{level_idc} = ":level_idc=40";
+    }
+    when ("bb") {
+	# Blackberry 9000
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=1500";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=1000";
+	$x264opt->{level_idc} = ":level_idc=30";
+    }
+    when ("bbhq") {
+	# Blackberry 9000 HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=2";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{subq} = ":subq=8";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=2";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=1500";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=1000";
+	$x264opt->{level_idc} = ":level_idc=30";
+    }
+    when ("nks60") {
+	# Nokia S60
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=2";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=384";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=900";
+	$x264opt->{level_idc} = ":level_idc=12";
+    }
+    when ("nks60hq") {
+	# Nokia S60 HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=2";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=384";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=900";
+	$x264opt->{level_idc} = ":level_idc=12";
+    }
+    when ("psp") {
+	# PSP
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=2";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=1";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{direct_pred} = ":direct_pred=spatial";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":fast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=4000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=2500";
+	$x264opt->{level_idc} = ":level_idc=30";
+    }
+    when ("psphq") {
+	# PSP HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=2";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=4000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=2500";
+	$x264opt->{level_idc} = ":level_idc=30";
+    }
+    when ("ps3") {
+	# PS3
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=1";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{direct_pred} = ":direct_pred=spatial";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=20000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=20000";
+	$x264opt->{aud} = ":aud";
+    }
+    when ("ps3hq") {
+	# PS3 HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=20000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=20000";
+	$x264opt->{aud} = ":aud";
+    }
+    when ("mz") {
+	# Zune
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=1";
+	$x264opt->{mixed_refs} = ":nomixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":fast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=2500";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=2000";
+	$x264opt->{level_idc} = ":level_idc=30";
+    }
+    when ("mzhq") {
+	# Zune HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_adapt} = ":b_adapt=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":noweight_b";
+	$x264opt->{weightp} = ":weightp=0";
+	$x264opt->{direct_pred} = ":direct_pred=none";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.0";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{partitions} = ":partitions=p8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=2";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=2500";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=2000";
+	$x264opt->{level_idc} = ":level_idc=30";
+    }
+    when ("mx") {
+	# XBOX 360
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=2";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=3";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=1";
+	$x264opt->{subq} = ":subq=6";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{me} = ":me=hex";
+	$x264opt->{direct_pred} = ":direct_pred=spatial";
+	$x264opt->{aq_mode} = ":aq_mode=2";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{a8x8dct} = ":no8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=20000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=20000";
+    }
+    when ("mxhq") {
+	# XBOX 360 HQ
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=3";
+	$x264opt->{mixed_refs} = ":mixed_refs";
+	$x264opt->{bframes} = ":bframes=6";
+	$x264opt->{b_adapt} = ":b_adapt=2";
+	$x264opt->{b_pyramid} = ":b_pyramid=normal";
+	$x264opt->{weight_b} = ":weight_b";
+	$x264opt->{weightp} = ":weightp=2";
+	$x264opt->{subq} = ":subq=7";
+	$x264opt->{mbtree} = ":mbtree";
+	$x264opt->{psy_rd} = ":psy_rd=0.8,0.2";
+	$x264opt->{me_range} = ":me_range=24";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{direct_pred} = ":direct_pred=auto";
+	$x264opt->{aq_mode} = ":aq_mode=1";
+	$x264opt->{partitions} = ":partitions=p8x8,b8x8,i8x8,i4x4";
+	$x264opt->{deblock} = ":deblock";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":cabac";
+	$x264opt->{a8x8dct} = ":8x8dct";
+	$x264opt->{fast_pskip} = ":nofast_pskip";
+	$x264opt->{dct_decimate} = ":nodct_decimate";
+	$x264opt->{level_idc} = ":level_idc=41";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=20000";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=20000";
+    }
+    when ("htm") {
+	# HTC Magic
+	#"$opt->{bitrate}=512:global_header"
+	$x264opt->{force_cfr} = ":force_cfr";
+	$x264opt->{frameref} = ":frameref=6";
+	$x264opt->{bframes} = ":bframes=0";
+	$x264opt->{b_pyramid} = ":b_pyramid=none";
+	$x264opt->{subq} = ":subq=5";
+	$x264opt->{mbtree} = ":nombtree";
+	$x264opt->{me} = ":me=umh";
+	$x264opt->{partitions} = ":partitions=all";
+	$x264opt->{chroma_me} = ":chroma_me";
+	$x264opt->{trellis} = ":trellis=1";
+	$x264opt->{cabac} = ":nocabac";
+	$x264opt->{dct_decimate} = ":dct_decimate";
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=2500";
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=2000";
+	$x264opt->{level_idc} = ":level_idc=30";
+    }
+    when (["ultrafast","superfast","veryfast","faster","fast","medium","slow","slower","veryslow","placebo"]) {
+        $x264opt->{preset} = ":preset=" . $opt->{profile};
+	$x264opt->{force_cfr} = ":force_cfr";
+    }
+}
+
+if ( $opt->{bitrate} ) {
+    $x264opt->{bitrate} = ":bitrate=" . $opt->{bitrate};
+} else {
+    $x264opt->{bitrate} = "";
+}
+if ( $opt->{maxrate} ) {
+    if ( $x264opt->{vbv_maxrate} eq "" ) {
+	$x264opt->{vbv_maxrate} = ":vbv_maxrate=" . $opt->{maxrate};
+    } else {
+	$x264opt->{vbv_maxrate} =~ /:\w+=(.+)/;
+	if ( $opt->{maxrate} < $1) {
+	    $x264opt->{vbv_maxrate} = ":vbv_maxrate=" . $opt->{maxrate};
+	}
+    }
+}
+if ( $opt->{bufsize} ) {
+    if ( $x264opt->{vbv_bufsize} eq "" ) {
+	$x264opt->{vbv_bufsize} = ":vbv_bufsize=" . $opt->{bufsize}
+    } else {
+	$x264opt->{vbv_bufsize} =~ /:\w+=(.+)/;
+	if ( $opt->{bufsize} < $1 ) {
+	    $x264opt->{vbv_bufsize} = ":vbv_bufsize=" . $opt->{bufsize};
+	}
+    }
+}
+my $x264encoptions;
+while ( my ($key, $value) = each(%{$x264opt}) ) {
+    $x264encoptions = $x264encoptions . $value;
+}
+#$x264encoptions = "$me$me_range$dct_decimate$interlaced$a8x8dct$fast_pskip$trellis$scenecut$chroma_qp_offset$nr\
+#$ip_factor$pb_factor$cplx_blur$qblur$qcomp$slices$slice_max_size$slice_max_mbs$partitions$mixed_refs$qp_min\
+#$qp_max$qp_step$keyint$keyint_min$psy_rd$nopsy$frameref$bframes$b_adapt$b_bias$b_pyramid$weight_b$weightp\
+#$direct_pred$subq$mbtree$rc_lookahead$sync_lookahead$constrained_intra$chroma_me$cabac$aud$nal_hrd$aq_strength\
+#$aq_mode$deblock$stats$ratetol$vbv_maxrate$vbv_bufsize$vbv_init$cqm$deadzone_inter$deadzone_intra$global_header\
+#$opt->{level}_idc:threads=auto:ssim:psnr${bitrate}"
+
+unless ( $x264encoptions eq "" ) {
+    $x264encoptions = $x264encoptions . ":threads=auto:ssim:psnr";
+    # removing leading colon
+    $x264encoptions =~ s/^:(.+)/$1/;
+    print $LOG  "x264encoptions " . $x264encoptions . "\n" ;
+}
+
+# Video scaling section
+unless ( $opt->{sourcewidth} eq "" ) {
+    &pre_calculate_geometry ();
+
+    &device_resolution_mapping ( $LOG );
+    print "starting to build filter chain\n" if $opt->{debug};
+    &build_filter_chain ( $LOG );
+}
+
+exit 0;

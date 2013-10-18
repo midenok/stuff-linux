@@ -1,0 +1,7 @@
+General;FileSize: %FileSize/String% (%FileSize% bytes)
+Duration: %Duration/String3% (
+Video;%FrameCount% frames)
+Subtitles: Not present
+Video: %Width%x%Height% (%DisplayAspectRatio%:1), %FrameRate/String%, %CodecID% MPEG-4, %BitRate/String%, %Resolution% bpp
+Audio;
+Audio: %SamplingRate/String%, %Format% %Format_Profile%, %Channel(s)/String%, %BitRate/String%

@@ -1,0 +1,17 @@
+#!/bin/sh
+days="-days 10000"
+req="openssl req -nodes -new -batch $days"
+ca="openssl ca -batch -md sha1 $days"
+issuer="-subj "'/C=RU/ST=Moskow/L=Moskow/OU=midenfurken/CN=slimCA'
+subj="-subj "'/C=RU/ST=Moskow/L=Moskow/OU=midenfurken/CN=slimCert'
+ca_key=newca.pem
+ca_pem=newca.pem
+ca_serial=newca.serial
+new_key=newkey.pem
+new_req=newreq.pem
+new_pem=newcert.pem
+set -x
+$req -x509 -text $issuer -out $ca_pem -keyout $ca_key -extensions v3_ca
+$req -keyout $new_key -out $new_req $subj
+openssl x509 -req -in $new_req -out $new_pem -CA $ca_pem -CAkey $ca_key $days -CAserial $ca_serial -CAcreateserial -text -sha1 -extfile /etc/ssl/openssl.cnf -extensions usr_cert
+rm $new_req

@@ -1,0 +1,578 @@
+#!/usr/bin/perl -w
+package main;
+
+use strict;
+use Carp;
+
+use Getopt::Long qw(:config bundling);
+use Pod::Usage;
+use IPC::Open3;
+use Symbol;
+use IO::Handle;
+
+Getopt::Long::Configure(qw(
+    permute
+    pass_through
+));
+
+my %c = (
+    verbose => 0,
+    filemask => '*.jpeg,*.JPEG,*.jpg,*.JPG',
+    default_group_template => "%Y-%m-%d"
+);
+
+GetOptions (\%c, qw(
+    print|p
+    set_kw|set-keyword|set=s@
+    replace_kw|replace-keyword|replace=s
+    with_kw|with-keyword|with=s
+    remove_kw|remove-keyword|remove=s@
+    remove_all|remove-all
+    group|group-by:s
+    group_toplevel|group-toplevel
+    group_into|group-into=s
+    group_suffix|group-suffix|s=s
+    recursive|R|r
+    filemask|m
+    quiet|q
+    verbose|v+
+    help|h
+));
+
+if (defined $c{group} && (-f $c{group} || -d $c{group})) {
+    unshift @ARGV, $c{group};
+    $c{group} = "";
+}
+
+if (!$c{help}) {
+    if (!@ARGV) {
+        push @ARGV, '.';
+    }
+
+    if (($c{group_toplevel} || $c{group_into}) && !$c{group}) {
+        $c{group} = "";
+    }
+    
+    if (!$c{set_kw} &&
+        !$c{replace_kw} &&
+        !$c{remove_kw} &&
+        !$c{remove_all} &&
+        !$c{print} &&
+        !defined $c{group}) {
+        print STDERR "At least one command required!\n\n";
+        $c{help} = 1;
+    }
+    
+    if ($c{replace_kw} && !$c{with_kw} ||
+        !$c{replace_kw} && $c{with_kw}) {
+        die "--replace-keyword and --with-keyword must be used together!\n";
+    }
+    
+    if ($c{remove_all} && ($c{set_kw} || $c{replace_kw} || $c{remove_kw} || $c{print})) {
+        die "--remove-all must be used alone!\n";
+    }
+    
+    if ($c{print} && ($c{set_kw} || $c{replace_kw} || $c{remove_kw} || $c{remove_all})) {
+        die "--print must be used alone!\n";
+    }
+    
+    if ($c{remove_kw} &&
+        (defined $c{set_kw} && ($c{remove_kw} eq $c{set_kw}) ||
+         defined $c{with_kw} && ($c{remove_kw} eq $c{with_kw}))) {
+        die "Are you sure you want to delete and add same keyword '$c{remove_kw}'?\n";
+    }
+    
+    if ($c{group_toplevel} && $c{group_into}) {
+        die "--group-toplevel and --group-into cannot be used together!\n"
+    }
+
+    if (defined $c{group} && $c{group} eq "") {
+        $c{group} = $c{default_group_template};
+    }
+    
+    if ($c{group_suffix}) {
+        $c{group} .= ": $c{group_suffix}";
+    }
+    
+    $c{filemask_array} = [
+        map {s/^\s+//; s/\s+$//; $_}
+        split(',', $c{filemask})
+    ];
+}
+
+if ($c{help}) {
+    pod2usage(-verbose => 99, -sections => 'SYNOPSIS|COMMANDS|OPTIONS');
+}
+
+$c{target_files} = [];
+
+for my $file_or_dir (@ARGV)
+{
+    if (-d $file_or_dir) {
+        push @{$c{target_files}}, @{find_files($file_or_dir)};
+    } elsif (-f $file_or_dir) {
+        push @{$c{target_files}}, $file_or_dir;
+    } else {
+        die "'${file_or_dir}' is not a file or directory!\n";
+    }
+}
+
+my $counter = 0;
+my $step_secs = 1;
+my $next_progress = time() + $step_secs;
+my $granularity = 10;
+my $total = @{$c{target_files}};
+
+for my $file (@{$c{target_files}}) {
+    my $exifTool = new ExifKeywords;
+    $exifTool->ExtractInfo($file) or
+        die "Can't extract info from ${file}\n";
+
+    ++$counter;    
+    if ($c{print}) {
+        my $keywords = $exifTool->GetKeywords();
+        if (@$keywords) {
+            print "${file}: ", join(", ", @$keywords), "\n";
+        } else {
+            print_verbose("${file}: (no keywords)");
+        }
+        next;
+    }
+
+    if ($c{remove_all}) {
+        print_verbose("${file}: (deleting all)");
+        $exifTool->SetKeywords();
+    } else {
+        if ($c{remove_kw}) {
+            for my $kw (@{$c{remove_kw}}) {
+                if ($exifTool->KeywordExists($kw)) {
+                    print_verbose("${file}: (deleting '${kw}')");
+                    $exifTool->DeleteKeyword($kw);
+                }
+            }
+        }
+    
+        if ($c{replace_kw} && $exifTool->KeywordExists($c{replace_kw})) {
+            print_verbose("${file}: (replacing '$c{replace_kw}' with '$c{with_kw}')");
+            $exifTool->ReplaceKeyword($c{replace_kw}, $c{with_kw});
+        }
+    
+        if ($c{set_kw}) {
+            for my $kw (@{$c{set_kw}}) {
+                if (!$exifTool->KeywordExists($kw)) {
+                    print_verbose("${file}: (adding '${kw}')");
+                    $exifTool->SetKeywords($kw, AddValue => 1);
+                }
+            }
+        }
+    }
+    
+    my $new_file = get_group_filename($file, $exifTool);
+
+    if ($exifTool->Modified()) {
+        $exifTool->WriteInfoSafe($file, $new_file);
+        if (defined $new_file) {
+            print_verbose("${file}: (saved to ${new_file})");
+            unlink $file or die "${file}: $!\n";
+        }
+    } else {
+        if (defined $new_file) {
+            print_verbose("${file}: (moving to ${new_file})");
+            shell_system(mv => $file, $new_file);
+        }
+    }
+
+    if (defined $new_file) {
+        delete_empty_dirs($file);
+    }
+
+    if (!$c{quiet} && $counter % $granularity == 0 && time() >= $next_progress) {
+        use integer;
+        my $percents = 100 * $counter / $total;
+        print "Processed ${counter}/${total} files (${percents}%)...\r";
+        STDOUT->flush();
+        $next_progress = time() + $step_secs;
+    }
+}
+
+if (!$c{quiet}) {
+    print "\e[KProcessed ${counter} file". (${counter} == 1 ? '' : 's'). ".\n";
+}
+
+sub find_files
+{
+    my $target_dir = shift;
+    my @name_options = map {
+        -name => ($_, '-o')
+    } @{$c{filemask_array}};
+    pop @name_options;
+    @name_options = ('(', @name_options, ')');
+    my @maxdepth;
+    if (!$c{recursive}) {
+        push @maxdepth, qw'-maxdepth 1';
+    }
+    my @files = shell_open3(find => $target_dir, qw'-type f', @maxdepth, @name_options);
+    return \@files;
+}
+
+use Data::Dumper;
+use Date::Parse;
+use Date::Format;
+use File::Basename;
+
+sub get_group_filename
+{
+    my $file = shift;
+    my $exifTool = shift;
+
+    if (!$c{group}) {
+        return undef;
+    }
+    
+    my $date = $exifTool->GetValue('DateTimeOriginal', 'ValueConv')
+        or return undef;
+    my $dir_name = time2str($c{group}, str2time($date));
+    
+    my $old_dir_path = dirname($file);
+    my $dir_path;
+    if ($c{group_into}) {
+        $dir_path = "$c{group_into}/${dir_name}";
+    } elsif ($c{group_toplevel}) {
+        $old_dir_path =~ m|^(/*[^/]+)|;
+        $dir_path = "${1}/${dir_name}";
+    } else {
+        $dir_path = "${old_dir_path}/${dir_name}";
+    }
+    
+    -d $dir_path
+        or shell_system(mkdir => '-p', $dir_path);
+
+    my $new_file = $dir_path. '/'. basename($file);
+    
+    if ($new_file eq $file) {
+        return undef;
+    }
+    
+    if (-e $new_file) {
+        die "File already exists: ${new_file}\n";
+    }
+    
+    return $new_file;
+}
+
+sub delete_empty_dirs
+{
+    my $file = shift;
+    my $dir_path = dirname($file);
+    my @dirs = split('/', $dir_path);
+    my $root = $dirs[0] ? '' : '/';
+    @dirs = grep{$_} @dirs;
+    open(OLD_STDERR, ">&STDERR") or die "Couldn't dup STDERR: $!";
+    open(STDERR, ">/dev/null") or die "Couldn't redirect STDERR: $!";
+    
+    while(@dirs > 0) {
+        $dir_path = $root . join('/', @dirs);
+        if (system(rmdir => $dir_path)) {
+            last;
+        }
+        pop @dirs;
+    }
+
+    open(STDERR, ">&", *OLD_STDERR) or die "Couldn't dup STDERR: $!";
+}
+
+sub shell_open3
+{
+    my ($in, $out);
+    my (@out, @err);
+    my $err = Symbol::gensym;
+    my $pid = IPC::Open3::open3($in, $out, $err, @_);
+    close $in;
+    chomp(@out = <$out>);
+    @err = <$err>;
+    my $rc = waitpid($pid, 0) != -1 ? $? : -1;
+    check_system_rc($rc, \@err, @_);
+    return @out;
+}
+
+sub shell_system
+{
+    check_system_rc(system(@_), undef, @_);
+}
+
+sub check_system_rc
+{
+    my $rc = shift;
+    my $err = shift;
+
+    if (-1 == $rc) {
+        print STDERR @$err
+            if defined $err;
+        die "Command '", join(' ', @_), "' failed: $!\n";
+    }
+
+    if ($rc & 127) {
+        print STDERR @$err
+            if defined $err;
+        confess "Command died with signal " . ($rc & 127) .
+            (($rc & 128) ? ' (core dumped): ' : ': ') .
+            join(' ', @_), "\n";
+    }
+
+    my $status = $rc >> 8;
+
+    if ($status) {
+        print STDERR @$err
+            if defined $err;
+        die "Command failed with status ${status}: ", join(' ', @_), "\n";
+    }    
+}
+
+sub print_verbose
+{
+    if ($c{verbose}) {
+        print @_, "\n";
+    }
+}
+
+1;
+
+package ExifKeywords;
+use strict;
+use Carp;
+use Image::ExifTool qw(:Public);
+use base 'Image::ExifTool';
+
+sub __retrieve_keywords
+{
+    my $self = shift;
+    my @kws = $self->GetValue('Subject', 'ValueConv');
+
+    my $i = 0;
+    my %kws_hash = map { $_ => $i++ } @kws;
+
+    map {
+        if (!exists $kws_hash{$_}) {
+            push @kws, $_;
+            $kws_hash{$_} = $#kws;
+        }
+    } $self->GetValue('Keywords', 'ValueConv');
+   
+    $self->{__Exif_Keywords_Subclass}->{kws} = \@kws;
+    $self->{__Exif_Keywords_Subclass}->{kws_hash} = \%kws_hash;
+}
+
+sub __kws
+{
+    my $self = shift;
+    if (!exists $self->{__Exif_Keywords_Subclass}->{kws}) {
+        $self->__retrieve_keywords();
+    }
+    return $self->{__Exif_Keywords_Subclass}->{kws};
+}
+
+sub __kws_hash
+{
+    my $self = shift;
+    if (!exists $self->{__Exif_Keywords_Subclass}->{kws_hash}) {
+        $self->__retrieve_keywords();
+    }
+    return $self->{__Exif_Keywords_Subclass}->{kws_hash};
+}
+
+sub ExtractInfo
+{
+    my $self = shift;
+    my $res = $self->Image::ExifTool::ExtractInfo(@_);
+    if ($res) {
+        $self->__retrieve_keywords();
+    }
+    return $res;
+}
+
+sub GetKeywords
+{
+    my $self = shift;
+    return $self->__kws();
+}
+
+sub SetNewValueSafe
+{
+    my $self = shift;
+    my ($success, $error) = $self->SetNewValue(@_);
+    confess($error) if defined $error;
+    confess("Failed to set any tags") if $success < 1;
+}
+
+sub SetKeywords
+{
+    my $self = shift;
+    $self->SetNewValueSafe('XMP-dc:Subject', @_);
+    $self->SetNewValueSafe('IPTC:Keywords', @_);
+    $self->{__Exif_Keywords_Subclass}->{modified} = 1;
+}
+
+sub Modified
+{
+    my $self = shift;
+    if ($self->{__Exif_Keywords_Subclass}->{modified}) {
+        return 1;
+    }
+    return 0;
+}
+
+sub ReplaceKeyword
+{
+    my $self = shift;
+    my $replace_kw = shift;
+    my $with_kw = shift;
+    
+    my $kws_hash = $self->__kws_hash();
+    if (exists $kws_hash->{$with_kw}) {
+        $self->DeleteKeyword($replace_kw);
+        return;
+    }
+    
+    my $kws = $self->__kws();
+    my $i = $kws_hash->{$replace_kw};
+    $kws->[$i] = $with_kw;
+    $kws_hash->{$with_kw} = $i;
+    delete $kws_hash->{$replace_kw};
+    $self->SetKeywords($kws);
+}
+
+sub DeleteKeyword
+{
+    my $self = shift;
+    my $keyword = shift;
+    my $kws_hash = $self->__kws_hash();
+   
+    return
+        if !exists $kws_hash->{$keyword};
+
+    $self->SetKeywords($keyword, DelValue => 1);
+
+    my $i = $kws_hash->{$keyword};
+    my $kws = $self->__kws();
+    splice @$kws, $i, 1;
+
+    $i = 0;
+    my %kws_hash = map { $_ => $i++ } @$kws;
+    $self->{__Exif_Keywords_Subclass}->{kws_hash} = \%kws_hash;
+}
+
+sub KeywordExists
+{
+    my $self = shift;
+    my $keyword = shift;
+    return exists $self->__kws_hash()->{$keyword};
+}
+
+sub WriteInfoSafe
+{
+    my $self = shift;
+    my $file = shift;
+    my $new_file = shift;
+
+    my $write_file = defined $new_file ? $new_file : $file;
+    my $tmpfile = "${write_file}_exiftool_tmp";
+    if (-f $tmpfile) {
+        # Unlink previous tmp file or WriteInfo will fail
+        unlink $tmpfile
+            or die "unlink ${tmpfile}: $!\n";
+    }
+
+    my $result = $self->WriteInfo($file, $new_file, @_);
+    my $warning = $self->GetValue('Warning');
+    if ($result == 0) {
+        confess($self->GetValue('Error'));
+    }
+    if ($warning) {
+        print STDERR $warning, "\n";
+    }
+}
+
+1;
+
+=head1 SYNOPSIS
+
+exif-keywords [OPTION]... DIR|FILE...
+
+=head1 COMMANDS
+
+=over 4
+
+=item B<--print, -p>
+
+Print a list of keywords associated with file
+
+=item B<--set[-keyword] KW>
+
+Add keyword if it is not exists yet.
+Keyword is added to Iptc.Application2.Keywords and Xmp.dc.subject tags.
+
+=item B<--replace[-keyword] KW_1 --with[-keyword] KW_2>
+
+Replace one keyword with another keyword.
+
+=item B<--remove[-keyword] KW>
+
+Remove keyword.
+
+=item B<--remove-all>
+
+Remove *all* keywords. Use with caution!
+
+=item B<--group[-by] [TEMPLATE]>
+
+Group picture files by Exif date. This operation involves operations of file moving and creation of
+directories! Directories are created by TEMPLATE in bottom level directory of each file
+or by one of specified options '--group-toplevel' or '--group-into'. Look Date::Format to for
+the TEMPLATE format. The default value for TEMPLATE is '%Y-%m-%d'.
+
+=back
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<--recursive, -R, -r>
+
+Process directories recursively
+
+=item B<--filemask, -m MASK>
+
+Comma-separated filemasks used to search DIR. Defaults to:
+
+*.jpeg, *.JPEG, *.jpg, *.JPG
+
+=item B<--group-toplevel>
+
+Implies '--group' command. Group files in the top-level directory instead of
+bottom-level. This option also incurs deleting of empty left directories.
+
+=item B<--group-into DIR>
+
+Implies '--group' command. Group files in directory DIR instead of bottom-level
+directory of each file. This option also incurs deleting of empty left directories.
+
+=item B<--group-suffix, -s SUFFIX>
+
+Modifies template to look like 'TEMPLATE: SUFFIX'. For example, default template
+will be '%Y-%m-%d: SUFFIX'.
+
+=item B<--help, -h>
+
+Print this help
+
+=item B<--verbose, -v>
+
+Print verbose messages
+
+=item B<-quiet, -q>
+
+Do not print informational messages
+
+=back
+
+=cut

@@ -1,0 +1,6 @@
+#!/bin/sh
+for k in "$@"
+do
+    gpg --keyserver subkeys.pgp.net --recv $k
+    gpg --export --armor $k | apt-key add -
+done
