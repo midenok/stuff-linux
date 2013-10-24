@@ -1,0 +1,44 @@
+#!/bin/bash
+
+load_array()
+{
+    name=$1
+    eval unset $name
+    shift
+
+    i=0
+    for f in "$@"
+    do
+        [ -f "$f" ] ||
+            continue
+        eval $name[$i]=\$f
+        i=$((i + 1))
+    done
+}
+
+list_array()
+{
+    while [ -n "$1" ]
+    do
+        [ -z "$2" ] &&
+            echo "$1" ||
+            echo "${1},"
+        shift
+    done        
+}
+
+load_array all_files *
+load_array src_cpp *.cpp *.cc
+load_array src_kcfg *.kcfg
+load_array src_ui *.ui
+
+cat<<EOF
+all files:
+$(list_array "${all_files[@]}")
+
+my sources:
+$(list_array "${src_cpp[@]}")
+
+my kcfg:
+$(list_array "${src_kcfg[@]}")
+EOF
