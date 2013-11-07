@@ -79,7 +79,8 @@ sub parse_chunk
 
     my $data;
     if ($chunk_ref->[0] !~ /^\d+$/) {
-        $self->cuckoo("Number must be digits ($self->{parsed}): '$chunk_ref->[0]'");
+        #$self->cuckoo("Number must be digits ($self->{parsed}): '$chunk_ref->[0]'");
+        return $data;
     }
     $data->{number} = $chunk_ref->[0];
 

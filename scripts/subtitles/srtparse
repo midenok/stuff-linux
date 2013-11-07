@@ -147,19 +147,20 @@ $c->dump($c);
 my @srt1;
 my @srt2;
 
-Video::Subtitle::SRT->new (sub {
-    my $data = shift;
-    push @srt1, $data;
-    # $data->{number}
-    # $data->{start_time}
-    # $data->{end_time}
-    # $data->{text}
-})->parse ($c->{srt1});
 
-Video::Subtitle::SRT->new (sub {
-    push @srt2, $_[0];
-})->parse ($c->{srt2});
+    my $p = Video::Subtitle::SRT->new (sub {
+        my $data = shift;
+        push @srt1, $data;
+        # $data->{number}
+        # $data->{start_time}
+        # $data->{end_time}
+        # $data->{text}
+    });
+    $p->parse ($c->{srt1});
 
+    Video::Subtitle::SRT->new (sub {
+        push @srt2, $_[0];
+    })->parse ($c->{srt2});
 
 
 $c->dump(\@srt1);
