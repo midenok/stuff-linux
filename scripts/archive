@@ -1,0 +1,16 @@
+#!/bin/sh
+curpath=`pwd`
+dir=$1
+[ -d "$dir" ] || {
+    echo "Operand must be a dir!" >&2
+    exit 1
+}
+newpath=$2
+newname=$(date -r "$dir" '+%Y-%m-%d')
+
+mv "$dir" "$newpath" ||
+    exit
+
+dirbase=$(basename "$dir")
+mv "$newpath/$dirbase" "$newpath/$newname"
+# touch -r "$dir" "$newdir"
