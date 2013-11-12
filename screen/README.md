@@ -54,6 +54,7 @@ Try to press any Alt+Fx, Ctrl+Fx, Shift+Fx, Alt+Shift+Fx: you will see correspon
 This means that terminfo DB works!
 
 Now:
+
 1. get corresponding `screenrc` (it must contain same keycodes);
 2. put it to `~/.screenrc`;
 3. run `screen`;
