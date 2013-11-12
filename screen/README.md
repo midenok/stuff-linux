@@ -52,3 +52,15 @@ Hit any function key.  Type 'end' to quit.  Type ? to update the display.
 
 Try to press any Alt+Fx, Ctrl+Fx, Shift+Fx, Alt+Shift+Fx: you will see corresponding names (kf4x, kf3x, kf2x, kf5x).
 This means that terminfo DB works!
+
+Now:
+1. get corresponding `screenrc` (it must contain same keycodes);
+2. put it to `~/.screenrc`;
+3. run `screen`;
+4. Write something on command prompt, then try to switch to another screen with Alt+F2 and return back with Alt+F1.
+
+Consider following features to implement:
+
+* some prefix keybinding to pass keybindings to child process (to be able to test in tack assigned keybindings);
+* terminfo names of keybindings instead of codes in `screenrc`;
+* screen name into envvar of child shell to be able to put into PS1.
