@@ -64,4 +64,7 @@ Consider following features to implement:
 
 * some prefix keybinding to pass keybindings to child process (to be able to test in tack assigned keybindings);
 * terminfo names of keybindings instead of codes in `screenrc`;
-* screen name into envvar of child shell to be able to put into PS1.
+* screen name into envvar of child shell to be able to put into PS1;
+* shorter bell message timeout (i.e. press Alt+F2 two times, you will see `This IS window 1 (bash).`);
+* bell message on any screen switch.
+
