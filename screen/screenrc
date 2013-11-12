@@ -28,18 +28,18 @@ bind I login on
 bind O login off
 bind } history
 
-bindkey ^[[25~ select 0
-bindkey ^[[26~ select 1
-bindkey ^[[27~ select 2
-bindkey ^[[28~ select 3
-bindkey ^[[29~ select 4
-bindkey ^[[31~ select 5
-bindkey ^[[32~ select 6
-bindkey ^[[33~ select 7
-bindkey ^[[34~ select 8
-bindkey ^[[35~ select 9
-bindkey ^[[36~ select 10
-bindkey ^[[37~ select 11
+bindkey ^[O3P select 0
+bindkey ^[O3Q select 1
+bindkey ^[O3R select 2
+bindkey ^[O3S select 3
+bindkey ^[[15;3~ select 4
+bindkey ^[[17;3~ select 5
+bindkey ^[[18;3~ select 6
+bindkey ^[[19;3~ select 7
+bindkey ^[[20;3~ select 8
+bindkey ^[[21;3~ select 9
+bindkey ^[[23;3~ select 10
+bindkey ^[[24;3~ select 11
 
 bindkey ^[[39~ stuff ^[];hello\007
 
