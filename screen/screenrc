@@ -1,26 +1,5 @@
-# $Id: screenrc,v 1.15 2003/10/08 11:39:03 zal Exp $
-#
-# /etc/screenrc
-#
-#   This is the system wide screenrc.
-#
-#   You can use this file to change the default behavior of screen system wide
-#   or copy it to ~/.screenrc and use it as a starting point for your own
-#   settings.
-#
-#   Commands in this file are used to set options, bind screen functions to
-#   keys, redefine terminal capabilities, and to automatically establish one or
-#   more windows at the beginning of your screen session.
-#
-#   This is not a comprehensive list of options, look at the screen manual for
-#   details on everything that you can put in this file.
-#
-
-# ------------------------------------------------------------------------------
-# SCREEN SETTINGS
-# ------------------------------------------------------------------------------
-
-#startup_message off
+startup_message off
+altscreen on
 #nethack on
 
 #defflow on # will force screen to process ^S/^Q
@@ -48,6 +27,21 @@ bind K kill
 bind I login on
 bind O login off
 bind } history
+
+bindkey ^[[25~ select 0
+bindkey ^[[26~ select 1
+bindkey ^[[27~ select 2
+bindkey ^[[28~ select 3
+bindkey ^[[29~ select 4
+bindkey ^[[31~ select 5
+bindkey ^[[32~ select 6
+bindkey ^[[33~ select 7
+bindkey ^[[34~ select 8
+bindkey ^[[35~ select 9
+bindkey ^[[36~ select 10
+bindkey ^[[37~ select 11
+
+bindkey ^[[39~ stuff ^[];hello\007
 
 # An example of a "screen scraper" which will launch urlview on the current
 # screen window
@@ -101,8 +95,10 @@ defnonblock 5
 #   in the next window, and then open mutt and tail in windows 8 and 9
 #   respectively.
 #
-# screen top
-# screen -t monkey ssh monkey
-# screen -t mail 8 mutt
-# screen -t daemon 9 tail -f /var/log/daemon.log
+screen 1 
+screen 2
+screen 3
+screen 4
+screen 5
+screen 0
 
