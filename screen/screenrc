@@ -42,8 +42,11 @@ bindkey ^[[23;3~ select 10
 bindkey ^[[24;3~ select 11
 
 bindkey ^[[Z focus
+bindkey ^[1 only
+bindkey ^[2 split
+bindkey ^[3 split -v
 
-bindkey ^[[39~ stuff ^[];hello\007
+# bindkey ^[[39~ stuff ^[];hello\007
 
 # An example of a "screen scraper" which will launch urlview on the current
 # screen window
