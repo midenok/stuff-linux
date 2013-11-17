@@ -1,0 +1,56 @@
+#!/bin/sh
+
+optstring_long="file,artist,comment,genre,album,track,title,year"
+optstring_short="facglnty"
+
+TEMP=$(getopt -o "${optstring_short}" --long "${optstring_long}" --name "$0" -- "$@")
+if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+eval set -- "$TEMP"
+
+unset format
+format() { format="${format:+${format} }$*"; }
+
+while true
+do
+    case "$1" in
+        -f|--file)
+            format %f
+            shift;;
+        -a|--artist)
+            format %a
+            shift;;
+        -c|--comment)
+            format %c
+            shift;;
+        -g|--genre)
+            format %g
+            shift;;
+        -l|--album)
+            format %l
+            shift;;
+        -n|--track)
+            format %n
+            shift;;
+        -t|--title)
+            format %t
+            shift;;
+        -y|--year)
+            format %y
+            shift;;
+        --)
+            shift
+            break;;
+    esac
+done
+
+[ -z "$format" ] &&
+    format %f %t
+
+
+[ -z "$1" ] &&
+    set -- *
+
+for f in "$@"
+do
+    mp3info -p "$format\n" "$f"
+done
