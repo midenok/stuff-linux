@@ -1,0 +1,34 @@
+#!/bin/bash
+
+# TODO: test if sourced, then fork (protect shopt, die)
+
+optstring="1246AaCfgKkMNnqsTtVvXxYy"
+optstring1="b:c:D:e:F:I:i:L:l:m:O:o:p:R:S:W:w:"
+
+opts=$(getopt -o "${optstring}${optstring1}" --name "$0" -- "$@")
+[ $? -ne 0 ] && exit 1
+
+eval set -- "$opts"
+
+shopt -s extglob
+optcase=$(sed -r -e 's/(.)/-\1|/g;s/^(.*)\|$/+(\1)/' <<< $optstring)
+optcase1=$(sed -r -e 's/(.):/-\1|/g;s/^(.*)\|$/+(\1)/' <<< $optstring1)
+ssh_args=()
+
+while true
+do
+    case "$1" in
+        $optcase)
+            ssh_args=("${ssh_args[@]}" "$1")
+            shift;;
+        $optcase1)
+            ssh_args=("${ssh_args[@]}" "$1" "$2")
+            shift 2;;
+        --) shift; break;;
+    esac
+done
+
+args=("$@")
+
+echo "SSH args: " ${ssh_args[@]}
+echo "Other args: " ${args[@]}
