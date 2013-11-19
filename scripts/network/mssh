@@ -2,33 +2,55 @@
 
 # TODO: test if sourced, then fork (protect shopt, die)
 
-optstring="1246AaCfgKkMNnqsTtVvXxYy"
-optstring1="b:c:D:e:F:I:i:L:l:m:O:o:p:R:S:W:w:"
+# os stands for optstring
+ssh_os1="1246AaCfgKkMNnqsTtVvXxYy"
+ssh_os2="b:c:D:e:F:I:i:L:l:m:O:o:p:R:S:W:w:"
 
-opts=$(getopt -o "${optstring}${optstring1}" --name "$0" -- "$@")
+opts=$(getopt -o "${ssh_os1}${ssh_os2}" --name "$0" -- "$@")
 [ $? -ne 0 ] && exit 1
 
 eval set -- "$opts"
 
 shopt -s extglob
-optcase=$(sed -r -e 's/(.)/-\1|/g;s/^(.*)\|$/+(\1)/' <<< $optstring)
-optcase1=$(sed -r -e 's/(.):/-\1|/g;s/^(.*)\|$/+(\1)/' <<< $optstring1)
+optcase1=$(sed -r -e 's/(.)/-\1|/g;s/^(.*)\|$/+(\1)/' <<< $ssh_os1)
+optcase2=$(sed -r -e 's/(.):/-\1|/g;s/^(.*)\|$/+(\1)/' <<< $ssh_os2)
 ssh_args=()
 
 while true
 do
     case "$1" in
-        $optcase)
+        $optcase1)
             ssh_args=("${ssh_args[@]}" "$1")
             shift;;
-        $optcase1)
+        $optcase2)
             ssh_args=("${ssh_args[@]}" "$1" "$2")
             shift 2;;
         --) shift; break;;
     esac
 done
 
-args=("$@")
+hosts=()
 
-echo "SSH args: " ${ssh_args[@]}
-echo "Other args: " ${args[@]}
+while [ "$1" ]
+do
+    if [[ "$1" != *: ]]
+    then
+        break
+    fi
+    hosts=("${hosts[@]}" "${1%:}")
+    shift
+done
+
+prefix()
+{
+    while read line
+    do
+        echo "$1:" $line
+    done
+}
+
+for host in "${hosts[@]}"
+do
+    ssh "${ssh_args[@]}" "$host" "$@" |
+        prefix "$host"
+done
