@@ -1,7 +1,8 @@
 #!/bin/sh
+clear; "$@"
+
 inotifywait -e close_write -qm "$1" |
-while read
+while read tmp
 do
-    clear
-    "$@"
+    clear; "$@"
 done
