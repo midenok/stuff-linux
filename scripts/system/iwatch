@@ -1,0 +1,7 @@
+#!/bin/sh
+inotifywait -e close_write -qm "$1" |
+while read
+do
+    clear
+    "$@"
+done
