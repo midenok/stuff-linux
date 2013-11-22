@@ -1,8 +1,8 @@
 #!/bin/sh
+exec </dev/null
 clear; "$@"
 
-inotifywait -e close_write -qm "$1" |
-while read tmp
+while inotifywait -e close_write -q "$1" > /dev/null
 do
     clear; "$@"
 done
