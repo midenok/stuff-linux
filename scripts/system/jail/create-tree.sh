@@ -4,16 +4,33 @@ IFS=""
 shopt -s expand_aliases
 alias read='IFS=" " read'
 
+push_back()
+{
+    arr=$1; shift
+    for val in "$@"
+    do
+        eval $arr[\${#$arr[@]}]=\$val
+    done
+}
+
 name=$1
+
+# TODO: validate $name
+
+[ "$name" ] || name=custom
+
 #mkdir ../$name
 #mkdir $name
 #cd $name
 
-# jail_mountpoint is to where we mount jail and where we use chroot
-jail_mountpoint=$(pwd)
+# TODO: read this from config or options
+jail_home=/opt/jail
 
 # jail_storage is where jail will hold its files (topmost branches of aufs filesystem)
-jail_storage=$jaildir
+jail_storage=$jail_home/${name}.trees
+
+# jail_mountpoint is to where we mount jail and where we use chroot
+jail_mountpoint=$jail_home/$name
 
 # Jail will consist of following trees:
 #
@@ -32,13 +49,13 @@ do
 done
 
 # detect if additional filesystems are present (i.e. separate partitions)
-
+declare -a partitions
 while read src x dst x type opts
 do
     [ $type != none -a "${mounts_check2[$dst]}" ] ||
         continue
-    
-    echo $src $dst $type
+
+    push_back partitions $dst
     # false
 done <<< $mounts
 
@@ -51,13 +68,39 @@ done <<< $mounts
 
 
 echo
-echo stage 2
+echo stage 2: overlap check
 
+declare -a exclude_points
+echo $jail_storage
 while read src x dst x type opts
 do
-    [[ $jaildir == $dst/* && $type == none && $opts =~ \\bbind\\b ]] ||
+    [[ $jail_storage/ == $dst/* && $type == none && $opts =~ \\bbind\\b ]] ||
         continue
-    echo $src
+    push_back exclude_points $src
 done <<< $mounts
+
+echo
+echo stage 3: create dirs in jail_storage
+
+echo mkdir $jail_storage/root
+
+for part in ${partitions[@]}
+do
+    jail_part=${jail_storage}${part}
+    echo mkdir $jail_part
+    for exclude in ${exclude_points[@]}
+    do
+        [[ $exclude/ == $part/* ]] ||
+            continue
+        echo touch $jail_part/.separated
+        for include in $part/*
+        do
+            [[ $exclude/ == $include/* ]] &&
+                continue
+            jail_part=${jail_storage}${include}
+            echo mkdir $jail_part
+        done
+    done
+done
 
 #mkdir -p root opt/kde3 var home usr/sbin usr/bin usr/lib32 usr/include usr/lib usr/share
