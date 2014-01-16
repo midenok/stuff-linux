@@ -37,7 +37,7 @@ Dump sources of parsed classes.
 =item B<--context[-lines], -C NUM>
 
 Show NUM count of lines before the line that caused any error,
-including that line. 0 turns off context printing. Default: 3 
+including that line. 0 turns off context printing. Default: 3
 
 =item B<--duplicates, --dups fail | force | skip | overwrite>
 
@@ -165,11 +165,11 @@ sub get_options
     if ($c->{source}) {
         $c->{classes_wildcard} = $c->{source};
     }
-    
+
     if (defined $c->{source}) {
         $c->{source} = 1;
     }
-    
+
     if ($c->{list_classes}) {
         $c->{classes_wildcard} = $c->{list_classes};
     }
@@ -177,12 +177,12 @@ sub get_options
     if (defined $c->{list_classes}) {
         $c->{list_classes} = 1;
     }
-    
+
     if ($c->{classes_wildcard}) {
         $c->{classes_regex} =
             Text::Glob::glob_to_regex_string($c->{classes_wildcard});
     }
-    
+
     if ($c->{classes_regex}) {
         if ($c->{ignore_case}) {
             $c->{classes_regexp} = qr/^$c->{classes_regex}$/i;
@@ -190,7 +190,7 @@ sub get_options
             $c->{classes_regexp} = qr/^$c->{classes_regex}$/;
         }
     }
-    
+
     if ($c->{duplicates}
         && $c->{duplicates} ne 'skip'
         && $c->{duplicates} ne 'force'
@@ -199,7 +199,7 @@ sub get_options
     {
         die "--duplicates must be 'skip', 'overwrite', 'force' or 'fail'!\n";
     }
-    
+
     if ($c->{check}) {
         $c->{parse_errors} = 'show';
     }
@@ -213,7 +213,7 @@ sub get_options
     {
         die "--parse-errors must be 'skip', 'show' or 'fail'!\n"
     }
-    
+
     if ($c->{produce}
         && $c->{produce} ne 'struct'
         && $c->{produce} ne 'enum')
@@ -287,7 +287,7 @@ sub new
     $self->{methods} = []
         unless ref($self->{methods}) eq 'ARRAY';
     $self->{by_name} = {}
-        unless ref($self->{by_name}) eq 'HASH';        
+        unless ref($self->{by_name}) eq 'HASH';
     $self->{orphan_comments} = []
         unless ref($self->{orphan_comments}) eq 'ARRAY';
     $self->{text} = []
@@ -300,12 +300,12 @@ sub add_method
     my $self = shift;
     my $name = shift;
     my $arg2 = shift;
-    
+
     my $method = Method->new({
         name => $name,
         origin => $arg2
     });
-    
+
     my $side_comment = shift;
     if (!defined $side_comment) {
         $side_comment = $arg2;
@@ -374,7 +374,7 @@ sub open
 
     open my $fh, '<', $file
         or die "${file}: $!\n";
-        
+
     my $self = bless {
         conf => $c,
         file => $file,
@@ -405,9 +405,9 @@ sub get_line
             $_ = <$fh>;
             return undef
                 unless defined $_;
-            
+
             $self->update_context();
-    
+
             $/ = "\r\n";
             if (0 == chomp) {
                 $/ = "\n";
@@ -422,7 +422,7 @@ sub get_line
 
         # drop in-place comments
         s|^(.*\w.*)/\*.*\*/(.*)$|$1$2|;
-        
+
         if ($self->{text}) {
             # drop leading spaces
             s|^\s*(\S.*)$| $1|;
@@ -445,9 +445,9 @@ sub update_context
 {
     my $self = shift;
     my $c = $self->{conf};
-    
+
     return undef unless $c->{max_context};
-    
+
     if (@{$self->{context}} >= $c->{max_context}) {
         shift @{$self->{context}};
     }
@@ -514,12 +514,12 @@ sub add_class
         die "Expected 'Class' ref";
     }
 
-    my $name = $class->{name};    
+    my $name = $class->{name};
     if ($mode == 2) {
         $self->{macros}->{$name} = $class;
         return;
     }
-    
+
     my $class2 = $self->{by_name}->{$name};
     if (defined $class2) {
         if (!$c->{duplicates} || $c->{duplicates} eq 'fail') {
@@ -686,7 +686,7 @@ sub parse_file
         $fh->{dont_process} = 0;
         try {
             my $class;
-    
+
             my $res0 = &$find (sub{
                 m/^\s*DECLARE_INTERFACE_\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)\s*{\s*$/
                     and do {
@@ -722,11 +722,11 @@ sub parse_file
                         throw(POSTPONE);
                     };
             });
-            
+
             if ($res0 <= 0) {
                 return;
             }
-            
+
             # check trailing '\' for macro directives
             my $end = $res0 == 2 ?
                 sub { m/\\\s*$/ ? 1 : -1 } :
@@ -735,7 +735,7 @@ sub parse_file
             my $res = 1;
             do {
                 my $method_name;
-                
+
                 $class->add_text($_);
                 $res = &$match (sub{
                     m/^\s*STDMETHOD\s*\(\s*(\w+)\s*\)\s*(\(.*\))/
@@ -762,7 +762,7 @@ sub parse_file
                         return 2;
                     return 0;
                 });
-                
+
                 while ($res > 1) {
                     $class->add_text($_);
                     $res = &$match (sub{
@@ -773,7 +773,7 @@ sub parse_file
                     });
                 }
             } while ($res > 0);
-            
+
             $self->{data}->add_class($class, $res0);
             $self->print_verbose($fh->{file});
         }
@@ -844,7 +844,7 @@ sub source
     my $self = shift;
     my $c = $self->{conf};
     my $data = $self->{data};
-    
+
     for my $class (@$data) {
         print join("\n", @{$class->{text}}), "\n";
     }
@@ -855,7 +855,7 @@ sub list_class
     my $self = shift;
     my $name = shift;
     my $data = $self->{data};
-    
+
     my $class = $data->get_by_name($name);
     my $n = 0;
     for my $method (@$class) {
@@ -879,7 +879,7 @@ sub produce
         $statement = 'struct';
         $member = sub { "  DWORD $_[1];" };
     }
-    
+
     for my $class (@$data) {
         print $statement. " ".
             $c->{prefix}.
@@ -905,7 +905,7 @@ sub read_files
     my $self = shift;
     my $files = shift;
     my $link = $self->{files_chain};
-    
+
     for my $file (@$files) {
         if ($link->{path}) {
             $link = $link->make_next();
@@ -913,14 +913,14 @@ sub read_files
         $link->set($file);
         $self->{files_by_name}->{$link->{name}} = $link;
     }
-    
+
     my $next;
     for ($link = $self->{files_chain}; defined $link; $link = $next)
     {
         $next = $link->{next};
         $self->parse_file($link);
     }
-        
+
     if ($self->{conf}->{sort}) {
         $self->{data}->sort();
     }
@@ -946,7 +946,7 @@ sub new
         conf => $c,
         files => []
     } => $class;
-    
+
     $self->{rxlist} = [
         map {
             s/^\s*(\S.*)$/$1/;
@@ -1066,7 +1066,7 @@ sub __construct_if_required__(*)
     if (exists $args->[0] && $args->[0] eq $package) {
         shift @$args;
     }
-    
+
     my $self = $package->new(@$args);
     unshift @$args, $self;
 }
