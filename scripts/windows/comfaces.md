@@ -12,6 +12,10 @@ Script takes .h headers from SDK as input and produces .h header for IDA PRO. It
 
 For `COMMAND` and `OPTION` descriptions see below `comfaces.pl --help`
 
+# Source
+
+https://github.com/midenok/linux/blob/master/scripts/windows/comfaces.pl
+
 # Usage examples
 
 ##### comfaces.pl --ls IDirectPlay*
