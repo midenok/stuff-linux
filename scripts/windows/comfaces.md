@@ -1,6 +1,6 @@
 # Description
 
-comfaces.pl script helps to import COM interfaces from Microsoft SDK header files to IDA PRO. Script was tested DirectX 7.0 SDK. There is no guarantee that it will work with another SDK header files.
+comfaces.pl script helps to import COM interfaces from Microsoft SDK header files to IDA PRO. Script was tested with DirectX 7.0 SDK. There is no guarantee that it will work with another SDK header files.
 
 Script takes .h headers from SDK as input and produces .h header for IDA PRO. It can create enums or structs depending on what is more convenient to use in IDA PRO.
 
