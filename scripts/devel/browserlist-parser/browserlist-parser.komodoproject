@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Komodo Project File - DO NOT EDIT -->
+<project id="98e2b9fe-8eb8-4cc2-a1a4-4e9fbc0fa43d" kpf_version="5" name="browserlist-parser.komodoproject">
+<file id="8fdcda4d-451e-43fe-a124-aa5947ef49c9" idref="98e2b9fe-8eb8-4cc2-a1a4-4e9fbc0fa43d" name="browserlist-parser.pl" url="browserlist-parser.pl">
+</file>
+<preference-set idref="98e2b9fe-8eb8-4cc2-a1a4-4e9fbc0fa43d">
+<preference-set id="Invocations">
+<preference-set id="Project">
+  <string id="cookieparams"></string>
+  <string relative="path" id="cwd"></string>
+  <string id="documentRoot"></string>
+  <string id="executable-params"></string>
+  <string relative="path" id="filename">browserlist-parser.pl</string>
+  <string id="getparams"></string>
+  <string id="language">Perl</string>
+  <string id="mpostparams"></string>
+  <string id="params">-i list_of_all_browsers.html</string>
+  <string id="postparams"></string>
+  <string id="posttype">application/x-www-form-urlencoded</string>
+  <string id="request-method">GET</string>
+  <boolean id="show-dialog">1</boolean>
+  <boolean id="sim-cgi">0</boolean>
+  <boolean id="use-console">0</boolean>
+  <string id="userCGIEnvironment"></string>
+  <string id="userEnvironment"></string>
+</preference-set>
+</preference-set>
+  <string id="currentInvocationLanguage">Perl</string>
+  <string id="language">Perl</string>
+  <string id="lastInvocation">Project</string>
+</preference-set>
+</project>
