@@ -1,3 +1,6 @@
+# Source
+https://github.com/midenok/linux/blob/master/scripts/devel/browserlist-parser/browserlist-parser.pl
+
 # Usage examples
 
 First, get `list_of_all_browsers.html` with command:
