@@ -1,5 +1,157 @@
 #!/usr/bin/perl
 
+package Config;
+
+use Getopt::Long qw(:config bundling);
+use Pod::Usage;
+use Data::Dumper;
+use strict;
+
+sub new
+{
+    my $class = shift;
+    $class = (ref $class || $class);
+
+    my $self = bless {
+        verbose => 0,
+        from_date => 0,
+        till_date => Date->new(Date::date()),
+        dir => "$ENV{HOME}/.wine/drive_c/Program Files/PokerStars/TournSummary/$ENV{USER}",
+        currencies => [ Currency->new() ] # by default only Play Money will be shown
+    } => $class;
+
+    $self->get_options();
+    return $self;
+}
+
+sub dump
+{
+    my $c = shift;
+    $c->{dump} or return $c;
+
+    my @dump;
+    my %save;
+    while ($_ = shift) {
+        if (! ref $_ && s/^-//) {
+            $save{$_} = ${$Data::Dumper::{$_}};
+            ${$Data::Dumper::{$_}} = shift;
+            next;
+        }
+        push @dump, $_;
+    }
+
+    $c->{dump}--;
+    for (@dump) {
+        print Dumper($_);
+    }
+    if (!$c->{dump}) {
+        exit 0;
+    }
+
+    for (keys %save) {
+        ${$Data::Dumper::{$_}} = $save{$_};
+    }
+
+    return $c;
+}
+
+sub get_options
+{
+    my $c = shift;
+
+    GetOptions ($c, qw(
+        dir=s
+        today
+        day=s
+        from_date_str|from-date|from=s
+        till_date_str|till-date|till=s
+        week:i
+        weeks=i
+        last=i
+        tablo
+        currency=s
+        dump|D+
+        verbose|v+
+        help|h
+    )) or exit 1;
+
+    if ($c->{help}) {
+        tie *OUT, __PACKAGE__;
+        my $fh = \*OUT;
+        pod2usage(-output => $fh, -verbose => 99, -sections => 'SYNOPSIS|COMMANDS|OPTIONS');
+    }
+
+    $c->process_options();
+    if (!$c->{from_date}) {
+        $c->{today} = 1;
+        $c->process_options();
+    }
+
+    $c->dump($c);
+
+    return $c;
+}
+
+sub process_options
+{
+    my $c = shift;
+    my $range_arg;
+
+    for my $arg (qw[from_date_str till_date_str]) {
+        if ($c->{$arg}) {
+            $arg =~ m/^(.*)_str$/;
+            $range_arg = $1;
+            $c->{$range_arg} = Date->new($c->{$arg});
+        }
+    }
+
+    if (exists $c->{day}) {
+        if ($range_arg) {
+            die "--day cannot be used with --${range_arg}!\n";
+        }
+        $c->{from_date} = Date->new($c->{day});
+        $c->{till_date} = $c->{from_date};
+        $range_arg = 'day';
+    }
+
+    if ($c->{today}) {
+        if ($range_arg) {
+            die "--today cannot be used with --${range_arg}!\n";
+        }
+        $c->{from_date} = $c->{till_date};
+    }
+
+    if (defined $c->{week} && !$c->{week}) {
+        $c->{week} = 1;
+    }
+
+    if ($c->{week}) {
+        $c->{weeks} = 1;
+        if ($c->{week} > 1) {
+            $c->{till_date} -= $c->{till_date}->weekday() + ($c->{week} - 2) * 7;
+        }
+    }
+
+    if ($c->{weeks} > 0) {
+        $c->{last} = $c->{till_date}->weekday();
+        $c->{last} += ($c->{weeks} - 1) * 7;
+    }
+
+    if ($c->{last}) {
+        if ($range_arg) {
+            die "--last cannot be used with --${range_arg}!\n";
+        }
+        $c->{from_date} = Date->new($c->{till_date});
+        $c->{from_date} -= $c->{last} - 1;
+    }
+
+    if ($c->{currency}) {
+        $c->{currencies} = Currency::parse($c->{currency});
+    }
+}
+
+1;
+
 package Date;
 use strict;
 
@@ -262,7 +414,7 @@ sub add_tournament
     die "Wrong argument" if ref($t) ne 'PokerStars::Tournament';
 
     ++$self->{tourns_n};
-    
+
     if (!$self->{min_buyin} || $self->{min_buyin} > $t->{buyin}) {
         $self->{min_buyin} = $t->{buyin} + $t->{rake};
     }
@@ -287,7 +439,7 @@ sub add_tournstats
     $self->{tourns_n} += $s->{tourns_n};
     $self->{wins} += $s->{wins};
     $self->{profit} += $s->{profit};
-    
+
     if (!$self->{min_buyin} || $self->{min_buyin} > $s->{min_buyin}) {
         $self->{min_buyin} = $s->{min_buyin};
     }
@@ -342,6 +494,71 @@ sub profit_detail
         $self->buyin_range(). '; '.
         $self->profit_loss(). ')';
 }
+
+1;
+
+package Currency;
+use strict;
+
+use overload
+    '""' => \&operator_stringify,
+    '==' => \&operator_eq;
+
+our %names = (
+    '' => 'Play Money',
+    '$' => 'USD'
+);
+
+sub new
+{
+    my $class = shift;
+    my $abbrev = shift || '';
+
+    $class = (ref $class || $class);
+    my $self = bless {
+        abbrev => $abbrev,
+        name => $names{$abbrev}
+    } => $class;
+
+    die "Unknown currency: $abbrev\n"
+        unless defined $self->{name};
+
+    return $self;
+}
+
+sub operator_stringify
+{
+    my $self = shift;
+    return $self->{name};
+}
+
+sub operator_eq
+{
+    my $a = shift;
+    my $b = shift;
+    return $a->{abbrev} eq $b->{abbrev};
+}
+
+sub parse
+{
+    my $param = shift;
+    my @abbrevs;
+
+    if ($param eq 'all') {
+        @abbrevs = keys %names;
+    } else {
+        @abbrevs = split(',', $param);
+    }
+
+    my @currencies;
+    for my $abbrev (@abbrevs) {
+        push @currencies, __PACKAGE__->new($abbrev);
+    }
+    return \@currencies;
+}
+
+
+1;
 
 
 # parse TournSummary files
@@ -468,9 +685,10 @@ sub parse_file
         } $l[0];
 
         match {
-            m|^Buy-In: (\d+)/(\d+)$|
-                and $t->{buyin} = $1, 1
-                and $t->{rake} = $2, 1
+            m|^Buy-In: ([\$])?(\d[.0-9]*)/([\$])?(\d[.0-9]*)(\s+(USD))?$|
+                and $t->{currency} = Currency->new($1, $6), 1
+                and $t->{buyin} = $2, 1
+                and $t->{rake} = $4, 1
         } $l[1];
 
         match {
@@ -535,18 +753,21 @@ sub tablo
 {
     my $self = shift;
     my $date = shift;
+    my $currency = shift;
 
-    my $tourns = $self->byday($date);
-    my $tourns_n = @$tourns;
+    my @tourns = grep {
+        $_->{currency} == $currency
+    } @{$self->byday($date)};
+    my $tourns_n = @tourns;
 
-    my $sum = PokerStars::TournStats->new($tourns);
+    my $sum = PokerStars::TournStats->new(\@tourns);
     $self->{total_sum} += $sum;
 
     my $x = 0;
     for (my $y = 0; $y < 20 || $x < $tourns_n; $y += 10) {
         for ($x = $y; $x < $y + 10; ++$x) {
             if ($x < $tourns_n) {
-                my $tourn = $tourns->[$x];
+                my $tourn = $tourns[$x];
                 print $tourn->winlossXO();
             } else {
                 print ".";
@@ -574,100 +795,25 @@ use strict;
 use Getopt::Long qw(:config bundling);
 use Data::Dumper;
 
-my %c = (
-    verbose => 0,
-    from_date => 0,
-    till_date => Date->new(Date::date()),
-    dir => "$ENV{HOME}/.wine/drive_c/Program Files/PokerStars/TournSummary/$ENV{USER}"
-);
+my $c = Config->new();
 
-GetOptions (\%c, qw(
-    dir=s
-    today
-    day=s
-    from_date_str|from-date|from=s
-    till_date_str|till-date|till=s
-    week:i
-    weeks=i
-    last=i
-    tablo
-    dump
-    verbose|v+
-    help|h
-));
+my $dir = $ARGV[0] || $c->{dir} || '.';
+$c->{dir} = $dir;
+my $p = PokerStars::TournSummary->new($c);
 
-my $range_arg;
+$p->parse_range($c->{from_date}, $c->{till_date});
+$c->dump($p->{data});
 
-for my $arg (qw[from_date_str till_date_str]) {
-    if ($c{$arg}) {
-        $arg =~ m/^(.*)_str$/;
-        $range_arg = $1;
-        $c{$range_arg} = Date->new($c{$arg});
-    }
-}
-
-if (exists $c{day}) {
-     if ($range_arg) {
-        die "--day cannot be used with --${range_arg}!\n";
-     }
-     $c{from_date} = Date->new($c{day});
-     $c{till_date} = $c{from_date};
-     $range_arg = 'day';
-}
-
-if ($c{today}) {
-    if ($range_arg) {
-        die "--today cannot be used with --${range_arg}!\n";
-    }
-    $c{from_date} = $c{till_date};
-}
-
-if (defined $c{week} && !$c{week}) {
-    $c{week} = 1;
-}
-
-if ($c{week}) {
-    $c{weeks} = 1;
-    if ($c{week} > 1) {
-        $c{till_date} -= $c{till_date}->weekday() + ($c{week} - 2) * 7;
-    }
-}
-
-if ($c{weeks} > 0) {
-    $c{last} = $c{till_date}->weekday();
-    $c{last} += ($c{weeks} - 1) * 7;
-}
-
-if ($c{last}) {
-    if ($range_arg) {
-        die "--last cannot be used with --${range_arg}!\n";
-    }
-    $c{from_date} = Date->new($c{till_date});
-    $c{from_date} -= $c{last} - 1;
-}
-
-if ($c{dump}) {
-    print Dumper(\%c);
-}
-
-my $dir = $ARGV[0] || $c{dir} || '.';
-$c{dir} = $dir;
-my $p = PokerStars::TournSummary->new(\%c);
-
-$p->parse_range($c{from_date}, $c{till_date});
-
-if ($c{dump}) {
-    $p->dump();
-    exit 0;
-}
-
-for (my $d = $c{from_date}; $d <= $c{till_date}; ++$d) {
+for (my $d = $c->{from_date}; $d <= $c->{till_date}; ++$d) {
     if (@{$p->byday($d)} == 0) {
         next;
     }
-    print $d->formatted(), "\n";
-    $p->tablo($d);
-    print "\n";
+
+    for my $currency (@{$c->{currencies}}) {
+        print $d->formatted(), " (", $currency, ")\n";
+        $p->tablo($d, $currency);
+        print "\n";
+    }
 }
 
 if ($p->{parsed_days} > 1) {
