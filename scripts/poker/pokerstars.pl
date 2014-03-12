@@ -394,7 +394,8 @@ sub new
         min_buyin => 0,
         max_buyin => 0,
         profit => 0,
-        tourns_n => 0
+        tourns_n => 0,
+        play_time => 0
     } => $class;
 
     if (@_ > 0) {
@@ -414,6 +415,7 @@ sub add_tournament
     die "Wrong argument" if ref($t) ne 'PokerStars::Tournament';
 
     ++$self->{tourns_n};
+    $self->{play_time} += $t->{duration};
 
     if (!$self->{min_buyin} || $self->{min_buyin} > $t->{buyin}) {
         $self->{min_buyin} = $t->{buyin} + $t->{rake};
@@ -439,6 +441,7 @@ sub add_tournstats
     $self->{tourns_n} += $s->{tourns_n};
     $self->{wins} += $s->{wins};
     $self->{profit} += $s->{profit};
+    $self->{play_time} += $s->{play_time};
 
     if (!$self->{min_buyin} || $self->{min_buyin} > $s->{min_buyin}) {
         $self->{min_buyin} = $s->{min_buyin};
@@ -493,6 +496,21 @@ sub profit_detail
     return "(" .
         $self->buyin_range(). '; '.
         $self->profit_loss(). ')';
+}
+
+our @time_units = (qw(d h m s));
+
+sub play_time
+{
+    my $self = shift;
+    my @play_time = (gmtime $self->{play_time})[7, 2, 1, 0];
+    my $rs = '';
+    my $out = '';
+    for (my $i = 0; $i < @time_units; ++$i) {
+        $out .= $rs. $play_time[$i]. $time_units[$i], $rs = ' '
+            if $play_time[$i];
+    }
+    return $out;
 }
 
 1;
@@ -675,10 +693,12 @@ sub parse_file
 
     open F, "<", $full_file or die $self->verbose_file($file). ": $!\n";
     my @l = map { chomp; s/\r$//; $_ } <F>;
+    my $mtime = (stat(F))[9];
     close F;
 
     try {
         my $t = PokerStars::Tournament->new();
+
         match {
             m/^PokerStars Tournament #(\d+)\D/
                 and $d->{bynumber}->{$1} = $t
@@ -717,6 +737,8 @@ sub parse_file
             m|^  \d: ([^(]+)\s\(|
                 and $t->{opponent} = $1;
         } $l[$t->{win} ? 7 : 6];
+
+        $t->{duration} = $mtime - $t->{time};
 
         push @{$d->{byday}->{Date::date($t->{time})}}, $t;
         # $t->{localtime} = [localtime($t->{date})];
@@ -762,6 +784,8 @@ sub tablo
 
     my $sum = PokerStars::TournStats->new(\@tourns);
     $self->{total_sum} += $sum;
+
+    print $date->formatted(), " (", $currency, "); play time: ", $sum->play_time(), "\n";
 
     my $x = 0;
     for (my $y = 0; $y < 20 || $x < $tourns_n; $y += 10) {
@@ -810,16 +834,16 @@ for (my $d = $c->{from_date}; $d <= $c->{till_date}; ++$d) {
     }
 
     for my $currency (@{$c->{currencies}}) {
-        print $d->formatted(), " (", $currency, ")\n";
         $p->tablo($d, $currency);
         print "\n";
     }
 }
 
 if ($p->{parsed_days} > 1) {
+    my $sum = $p->{total_sum};
     print "Total for $p->{parsed_days} days: ",
-        $p->{total_sum}->score_detail(), ' ',
-        $p->{total_sum}->profit_detail(), "\n";
+        $sum->score_detail(), ' ',
+        $sum->profit_detail(), "; play time: ", $sum->play_time(), "\n";
 }
 
 1;
