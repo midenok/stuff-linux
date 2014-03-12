@@ -67,7 +67,7 @@ sub get_options
         till_date_str|till-date|till=s
         week:i
         weeks=i
-        last=i
+        last|days=i
         tablo
         currency=s
         dump|D+
