@@ -7,17 +7,22 @@ use Pod::Usage;
 use Data::Dumper;
 use strict;
 
+
 sub new
 {
     my $class = shift;
     $class = (ref $class || $class);
+
+    my $play_money = Currency->new();
+
 
     my $self = bless {
         verbose => 0,
         from_date => 0,
         till_date => Date->new(Date::date()),
         dir => "$ENV{HOME}/.wine/drive_c/Program Files/PokerStars/TournSummary/$ENV{USER}",
-        currencies => [ Currency->new() ] # by default only Play Money will be shown
+        currencies => [ $play_money ], # by default only Play Money will be shown
+        total_currency => $play_money
     } => $class;
 
     $self->get_options();
@@ -395,16 +400,10 @@ sub new
         max_buyin => 0,
         profit => 0,
         tourns_n => 0,
-        play_time => 0
+        play_time => 0,
+        currency => shift
     } => $class;
 
-    if (@_ > 0) {
-        if (@_ == 1) {
-            $self += $_[0];
-        } else {
-            $self += \@_;
-        }
-    }
     return $self;
 }
 
@@ -416,18 +415,23 @@ sub add_tournament
 
     ++$self->{tourns_n};
     $self->{play_time} += $t->{duration};
+    $self->{wins} += $t->{win};
 
-    if (!$self->{min_buyin} || $self->{min_buyin} > $t->{buyin}) {
-        $self->{min_buyin} = $t->{buyin} + $t->{rake};
-    }
-    if ($t->{buyin} > $self->{max_buyin}) {
-        $self->{max_buyin} = $t->{buyin} + $t->{rake};
-    }
-    if ($t->{win}) {
-        ++$self->{wins};
-        $self->{profit} += $t->{buyin} - $t->{rake};
-    } else {
-        $self->{profit} -= $t->{buyin} + $t->{rake};
+    $self->{currency} = $t->{currency}
+        unless defined $self->{currency};
+
+    if ($self->{currency} == $t->{currency}) {
+        if (!$self->{min_buyin} || $self->{min_buyin} > $t->{buyin}) {
+            $self->{min_buyin} = $t->{buyin} + $t->{rake};
+        }
+        if ($t->{buyin} > $self->{max_buyin}) {
+            $self->{max_buyin} = $t->{buyin} + $t->{rake};
+        }
+        if ($t->{win}) {
+            $self->{profit} += $t->{buyin} - $t->{rake};
+        } else {
+            $self->{profit} -= $t->{buyin} + $t->{rake};
+        }
     }
     return $self;
 }
@@ -440,15 +444,21 @@ sub add_tournstats
 
     $self->{tourns_n} += $s->{tourns_n};
     $self->{wins} += $s->{wins};
-    $self->{profit} += $s->{profit};
     $self->{play_time} += $s->{play_time};
 
-    if (!$self->{min_buyin} || $self->{min_buyin} > $s->{min_buyin}) {
-        $self->{min_buyin} = $s->{min_buyin};
-    }
+    $self->{currency} = $s->{currency}
+        unless defined $self->{currency};
 
-    if ($s->{max_buyin} > $self->{max_buyin}) {
-        $self->{max_buyin} = $s->{max_buyin};
+    if ($self->{currency} == $s->{currency}) {
+        $self->{profit} += $s->{profit};
+
+        if (!$self->{min_buyin} || $self->{min_buyin} > $s->{min_buyin}) {
+            $self->{min_buyin} = $s->{min_buyin};
+        }
+
+        if ($s->{max_buyin} > $self->{max_buyin}) {
+            $self->{max_buyin} = $s->{max_buyin};
+        }
     }
     return $self;
 }
@@ -596,7 +606,7 @@ sub new
     my $self = bless {
       conf => $conf,
       dir => Util::chop_slash($conf->{dir}),
-      total_sum => PokerStars::TournStats->new(),
+      total_sum => PokerStars::TournStats->new($conf->{total_currency}),
       parsed_days => 0
     } => $class;
 
@@ -782,7 +792,8 @@ sub tablo
     } @{$self->byday($date)};
     my $tourns_n = @tourns;
 
-    my $sum = PokerStars::TournStats->new(\@tourns);
+    my $sum = PokerStars::TournStats->new();
+    $sum += \@tourns;
     $self->{total_sum} += $sum;
 
     print $date->formatted(), " (", $currency, "); play time: ", $sum->play_time(), "\n";
@@ -828,6 +839,8 @@ my $p = PokerStars::TournSummary->new($c);
 $p->parse_range($c->{from_date}, $c->{till_date});
 $c->dump($p->{data});
 
+my $tablos = 0;
+
 for (my $d = $c->{from_date}; $d <= $c->{till_date}; ++$d) {
     if (@{$p->byday($d)} == 0) {
         next;
@@ -836,10 +849,11 @@ for (my $d = $c->{from_date}; $d <= $c->{till_date}; ++$d) {
     for my $currency (@{$c->{currencies}}) {
         $p->tablo($d, $currency);
         print "\n";
+        ++$tablos;
     }
 }
 
-if ($p->{parsed_days} > 1) {
+if ($tablos > 1) {
     my $sum = $p->{total_sum};
     print "Total for $p->{parsed_days} days: ",
         $sum->score_detail(), ' ',
