@@ -1,0 +1,23 @@
+#!/bin/bash
+# This script is run as chrooted shell.
+# Put this into your schroot conf:
+#   environment-filter=""
+#   shell=/etc/schroot/shell
+# It restores original environment variables from *_PRESERVED ones.
+
+# This script helps to pass LD_LIBRARY_PATH, because it is cut by system,
+# empty environment-filter alone will not help to pass it.
+
+while read a b decl c
+do
+    value=${decl#*=}
+    var=${decl%%=*}
+    var2=${var%_PRESERVED}
+    if [ "$var2" -a "$var" != "$var2" ]
+    then
+        eval export $var2=$value
+        eval unset $var
+    fi
+done <<< "$(export -p)"
+
+exec /bin/bash
