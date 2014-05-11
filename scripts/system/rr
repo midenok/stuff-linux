@@ -1,0 +1,105 @@
+#!/bin/bash
+
+IFS=""
+shopt -s expand_aliases
+alias read='IFS=" " read'
+
+[ -x ~/.repreprorc ] &&
+    source ~/.repreprorc
+
+push_back()
+{
+    arr=$1; shift
+    for val in "$@"
+    do
+        eval $arr[\${#$arr[@]}]=\$val
+    done
+}
+
+declare -a RR_ARGS
+declare -a REPREPRO_ARGS
+get_rr_args()
+{
+    for opt in $@
+    do
+        case $opt
+        in
+            init)
+                push_back RR_ARGS $opt
+                continue
+                ;;
+            *)
+                push_back REPREPRO_ARGS $opt
+                continue
+                ;;
+        esac
+   done
+}
+
+check_empty()
+{
+    shopt -s nullglob # to not croak on empty expansion
+    shopt -s dotglob # to include hidden files
+    local -a files=(${1:-.}/*)
+    if [ "$files" ]
+    then
+        return 1
+    else
+        return 0
+    fi
+}
+
+die()
+{
+    [ -n "$1" ] && echo "$1" >&2;
+    exit 1
+}
+
+init_repo()
+{
+    if ! check_empty
+    then
+        die 'Directory is not empty!'
+    fi
+    
+    set -e
+    repo_name=$(basename `pwd`)
+    mkdir -p conf
+    cd conf
+    cat > distributions << EOF
+Origin: $repo_name
+Label: $repo_name
+Suite: unstable
+Codename: $repo_name
+Version: 1.0
+Architectures: all
+Components: main
+Description: $repo_name is a newly created custom repository
+EOF
+}
+
+main()
+{
+    for opt in $@
+    do
+        case $opt
+        in
+            init)
+                init_repo
+                continue
+                ;;
+        esac
+    done
+}
+
+get_rr_args $@
+
+if [ $RR_ARGS ]
+then
+    main ${RR_ARGS[@]}
+fi
+
+if [ $REPREPRO_ARGS ]
+then
+    reprepro ${REPREPRO_ARGS[@]}
+fi
