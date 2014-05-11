@@ -24,17 +24,33 @@ declare -a RR_ARGS
 declare -a REPREPRO_ARGS
 get_rr_args()
 {
+    local cmd arg
     for opt in $@
     do
         case $opt
         in
             init)
                 push_back RR_ARGS $opt
-                continue
+                ;;
+            add|includedeb)
+                cmd=includedeb
+                push_back REPREPRO_ARGS includedeb
+                ;;
+            list)
+                cmd=list
+                push_back REPREPRO_ARGS list
+                ;;
+            *.deb)
+                if [ "$cmd" = includedeb -a -z "$arg" ]
+                then
+                    push_back REPREPRO_ARGS $CODENAME
+                fi
+                push_back REPREPRO_ARGS $opt
+                unset cmd arg
                 ;;
             *)
+                arg=$opt
                 push_back REPREPRO_ARGS $opt
-                continue
                 ;;
         esac
    done
@@ -93,7 +109,7 @@ Label: $repo_name
 Suite: unstable
 Codename: $repo_name
 Version: 1.0
-Architectures: all
+Architectures: i386 amd64
 Components: main
 Description: $repo_name is a newly created custom repository
 EOF
