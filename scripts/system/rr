@@ -4,8 +4,12 @@ IFS=""
 shopt -s expand_aliases
 alias read='IFS=" " read'
 
-[ -x ~/.repreprorc ] &&
-    source ~/.repreprorc
+rrconf=~/.repreprorc
+
+[ -f $rrconf ] &&
+    source $rrconf
+
+export REPREPRO_BASE_DIR REPREPRO_CONFIG_DIR
 
 push_back()
 {
@@ -41,12 +45,26 @@ check_empty()
     shopt -s nullglob # to not croak on empty expansion
     shopt -s dotglob # to include hidden files
     local -a files=(${1:-.}/*)
+    shopt -u nullglob dotglob
     if [ "$files" ]
     then
         return 1
     else
         return 0
     fi
+}
+
+ask_yes_no()
+{
+    local REPLY
+    while true; do
+        read -n1 ${1:+-p $@}
+        echo
+        case $REPLY in
+            [Yy]) return 0;;
+            [Nn] ) return 1;;
+        esac
+    done
 }
 
 die()
@@ -61,12 +79,15 @@ init_repo()
     then
         die 'Directory is not empty!'
     fi
-    
-    set -e
-    repo_name=$(basename `pwd`)
-    mkdir -p conf
-    cd conf
-    cat > distributions << EOF
+
+    repo_path=$(pwd)
+    repo_name=$(basename $repo_path)
+
+    (
+        set -e
+        mkdir -p conf
+        cd conf
+        cat > distributions << EOF
 Origin: $repo_name
 Label: $repo_name
 Suite: unstable
@@ -75,6 +96,18 @@ Version: 1.0
 Architectures: all
 Components: main
 Description: $repo_name is a newly created custom repository
+EOF
+    ) || die
+
+    local overwrite=true
+    if [ -e "$rrconf" ]
+    then
+        ask_yes_no "Overwrite $rrconf (y/n)? " ||
+            overwrite=false
+    fi
+
+    $overwrite && cat > $rrconf << EOF
+REPREPRO_BASE_DIR="$repo_path"
 EOF
 }
 
@@ -94,12 +127,12 @@ main()
 
 get_rr_args $@
 
-if [ $RR_ARGS ]
+if [ "$RR_ARGS" ]
 then
     main ${RR_ARGS[@]}
 fi
 
-if [ $REPREPRO_ARGS ]
+if [ "$REPREPRO_ARGS" ]
 then
     reprepro ${REPREPRO_ARGS[@]}
 fi
