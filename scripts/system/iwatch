@@ -1,8 +1,11 @@
 #!/bin/sh
 exec </dev/null
+watch=$1
+shift
+
 clear; "$@"
 
-while inotifywait -e close_write -q "$1" > /dev/null
+while inotifywait -e close_write -e delete_self -q "$watch" > /dev/null
 do
     clear; "$@"
 done
