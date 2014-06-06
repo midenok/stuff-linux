@@ -1,0 +1,12 @@
+/use_internal_edit=/ s/^.*$/use_internal_edit=1/
+/confirm_delete=/ s/^.*$/confirm_delete=0/
+/confirm_exit=/ s/^.*$/confirm_exit=0/
+/editor_key_emulation=/ s/^.*$/editor_key_emulation=0/
+/editor_tab_spacing=/ s/^.*$/editor_tab_spacing=4/
+/editor_fill_tabs_with_spaces=/ s/^.*$/editor_fill_tabs_with_spaces=1/
+/editor_return_does_auto_indent=/ s/^.*$/editor_return_does_auto_indent=0/
+/editor_backspace_through_tabs=/ s/^.*$/editor_backspace_through_tabs=1/
+/editor_fake_half_tabs=/ s/^.*$/editor_fake_half_tabs=0/
+/editor_edit_confirm_save=/ s/^.*$/editor_edit_confirm_save=0/
+/message_visible=/ s/^.*$/message_visible=0/
+/menubar_visible=/ s/^.*$/menubar_visible=0/

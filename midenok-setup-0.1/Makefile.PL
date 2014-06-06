@@ -32,6 +32,9 @@ pure_all :: manifest
 pure_install ::
 	$(NOECHO) mkdir -p $(DESTINSTALLSHARE)
 	$(NOECHO) $(CP) -t $(DESTINSTALLSHARE) $(SHARE_FILES)
+	$(NOECHO) for subdir in $(SUBDIRS); do \
+		make -C $subdir install; \
+	done
 END
 }
 

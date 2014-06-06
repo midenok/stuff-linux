@@ -1,0 +1,18 @@
+#!/bin/bash
+IFS=""; shopt -s expand_aliases; alias read='IFS=" " read'
+
+die()
+{
+    [ -n "$1" ] && echo "$1" >&2;
+    exit 1
+}
+
+while read line
+do
+    [ $line ] ||
+        continue
+    first=${line%%=*}
+    [ $first = $line ] &&
+        die "Unkown setting: '${line}' (no =)!"
+    echo "/$first=/ s/^.*\$/$line/"
+done
