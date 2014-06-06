@@ -827,8 +827,6 @@ sub dump
 
 package main;
 use strict;
-use Getopt::Long qw(:config bundling);
-use Data::Dumper;
 
 my $c = Config->new();
 
