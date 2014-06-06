@@ -1,0 +1,40 @@
+#!/usr/bin/perl
+#
+# Author: Muhammad Faheem <faheem2084@gmail.com>
+# Copyright (c) 2011.
+# Last Updated: JAN 09, 2011
+#
+use strict;
+use warnings;
+use DBI;
+use Net::SIP;
+# sip server address.
+my $domain = 'opensips.org';
+my $proxy = 'opensips.org';
+my $registrar = 'opensips.org';
+my $realm = 'opensips.org';
+my $username = '923224005483';
+my $authusername= '923224005483';
+my $secret = '923224005483';
+my $ua = Net::SIP::Simple->new(
+ outgoing_proxy => $proxy,
+ registrar => $registrar,
+ domain => $domain,
+ realm => $realm,
+ from => $username,
+ auth => [$authusername,$secret],
+ );
+print 'CREATING RTP... ';
+my $ext = '923224005461';
+my $rtp = Net::SIP::Simple->rtp('media_recv_echo', 'output.pcmu-8000');
+my $tmp =$ua->invite($ext, init_media => $ua->rtp('media_send_recv', ('output.pcmu-8000', 1)), asymetric_rtp => 1,);
+my $err = $ua->error;
+print "ERROR: $err";
+if($tmp){
+  print 'Invite send';
+}else {
+  my $err = $ua->error;
+  if ($err ne ''){
+    print $err;
+  }
+}
