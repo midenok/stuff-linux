@@ -1,0 +1,2 @@
+#!/bin/sh
+cmake -D CMAKE_MODULE_PATH=$(dirname $0)/CMake "$@"
