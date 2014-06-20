@@ -1,2 +1,4 @@
 #!/bin/sh
-cmake -D CMAKE_MODULE_PATH=$(dirname $0)/CMake "$@"
+script=$(readlink -ne "$0")
+cmake_dir=$(dirname "$script")/CMake
+cmake -D CMAKE_MODULE_PATH="$cmake_dir" "$@"

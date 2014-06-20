@@ -25,6 +25,8 @@ macro(symlink src dst)
         if(rc)
             message(FATAL_ERROR "Failed mkdir -p ${dst}")
         endif()
+    elseif(IS_SYMLINK "${dst_file}")
+        file(REMOVE "${dst_file}")
     endif()
     execute_process(
         COMMAND cmake -E create_symlink "${src}" "${dst_file}"
