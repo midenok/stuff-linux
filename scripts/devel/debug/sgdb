@@ -62,7 +62,7 @@ at_exit() { true; }
 if [ -z "$no_gdb" ]
 then
     $verbose_on
-    /usr/bin/gdb ${opts} "$@"
+    /usr/bin/gdb -q ${opts} "$@"
     $verbose_off
 else
     $verbose_on
