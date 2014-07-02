@@ -1,0 +1,34 @@
+#!/bin/bash
+
+if [[ $_ != $0 ]]
+then
+    echo "Executing instead of source!" >&2
+    "${BASH_SOURCE[0]}" "$@"
+    return
+fi
+
+die()
+{
+    [ -n "$1" ] && echo "$1" >&2;
+    exit 1
+}
+
+[ -z "$1" ] && die "Must specify process name!"
+
+process=$1
+log="/tmp/${process}-mem-usage.log"
+date '+%b %e %H:%M:%S New session has been started!' >> "$log"
+
+do_log()
+{
+    prefix=$(date '+%b %e %H:%M:%S ')
+    ps l -C "$process" "$@" |sed -e "s/^/$prefix/">> "$log"
+}
+
+do_log
+
+while true
+do
+    sleep 1h
+    do_log --no-headers
+done
