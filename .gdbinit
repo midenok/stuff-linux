@@ -7,6 +7,8 @@ set print asm-demangle on
 set confirm off
 set pagination off
 set verbose on
+set logging file gdb.log
+set logging overwrite
 
 # for red hat:
 # set build-id-verbose 0
@@ -49,16 +51,12 @@ define confirm
 end
 
 define logging
-    if $argc == 0
-        show logging
+    if $argc == 1
+        set logging $arg0
     else
-        if $argc == 1
-            set logging $arg0
-        else
-            set logging $arg0 $arg1
-            show logging
-        end
+        set logging $arg0 $arg1
     end
+    show logging
 end
 
 
