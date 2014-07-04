@@ -17,7 +17,9 @@ die()
 
 process=$1
 log="/tmp/${process}-mem-usage.log"
+
 date '+%b %e %H:%M:%S New session has been started!' >> "$log"
+(exec sleep 60)
 
 do_log()
 {
@@ -29,6 +31,6 @@ do_log
 
 while true
 do
-    sleep 1h
+    (exec sleep 1h)
     do_log --no-headers
 done
