@@ -13,13 +13,20 @@ die()
     exit 1
 }
 
+at_exit()
+{
+    kill $(jobs -p)
+}
+
+trap at_exit EXIT
+
 [ -z "$1" ] && die "Must specify process name!"
 
 process=$1
 log="/tmp/${process}-mem-usage.log"
 
 date '+%b %e %H:%M:%S New session has been started!' >> "$log"
-(exec sleep 60)
+sleep 60
 
 do_log()
 {
@@ -31,6 +38,6 @@ do_log
 
 while true
 do
-    (exec sleep 1h)
+    sleep 1h
     do_log --no-headers
 done
