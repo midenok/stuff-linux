@@ -1,0 +1,57 @@
+#!/bin/bash
+# Pam-param killer. Will kill each process one-by-one in order from
+# highest to lowest PID and report free memory.
+
+log="/var/tmp/pam-param.log"
+
+list_pids()
+{
+     ps h -eo pid --sort +etimes,-pid
+}
+
+get_meminfo()
+{
+    eval $(cat /proc/meminfo | sed -e 's/:\s\+/=/; s/\s\+kB$//; s/(/_/; s/)//')
+    MemUsed=$((MemTotal - MemFree - Buffers - Cached))
+}
+
+ps_info()
+{
+    ps h -p $1 -o $2
+}
+
+mem_stat()
+{
+    get_meminfo
+    echo "MemUsed: $MemUsed"
+    echo "Slab: $Slab"
+}
+
+for pid in $(list_pids)
+do
+    [ $pid -lt 1000 ] &&
+        break;
+    
+    [ $pid -eq $$ ] &&
+        continue
+
+    cmd=$(ps_info $pid args)
+    elapsed=$(ps_info $pid etimes)
+    
+    [ -z "$cmd" -o -z "$elapsed" ] &&
+        continue
+        
+    [ "$elapsed" -lt 60 ] &&
+        continue
+        
+    [[ "$cmd" =~ ^\[ ]] &&
+        continue
+
+    kill -9 $pid
+    echo "Killed [$pid] $cmd"
+    mem_stat
+    echo
+    sleep 1
+done | tee "$log"
+
+echo "Written $log"
