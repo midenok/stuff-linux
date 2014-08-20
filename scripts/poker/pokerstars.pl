@@ -744,7 +744,7 @@ sub parse_file
         } $l[9];
 
         match {
-            m|^  \d: ([^(]+)\s\(|
+            m|^  \d: (.+)\s\([^(]+\)[^()]*$|
                 and $t->{opponent} = $1;
         } $l[$t->{win} ? 7 : 6];
 
