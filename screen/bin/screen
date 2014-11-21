@@ -1,0 +1,30 @@
+#!/bin/bash
+screen=/usr/bin/screen
+
+update_env()
+{
+    $screen -list| grep Detached |
+        while read session tmp
+        do
+            $screen -r $session -X setenv SSH_AUTH_SOCK $SSH_AUTH_SOCK
+        done
+}
+
+check_and_update_env()
+{
+    [ "$SSH_AUTH_SOCK" ] ||
+        return
+        
+    for arg in "$@"
+    do
+        case $arg in
+        -*r*|-*R*)
+            update_env
+            return;;
+        esac
+    done
+
+}
+
+check_and_update_env
+exec $screen "$@"
