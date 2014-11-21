@@ -14,7 +14,7 @@ check_and_update_env()
 {
     [ "$SSH_AUTH_SOCK" ] ||
         return
-        
+
     for arg in "$@"
     do
         case $arg in
@@ -26,5 +26,5 @@ check_and_update_env()
 
 }
 
-check_and_update_env
+check_and_update_env "$@"
 exec $screen "$@"
