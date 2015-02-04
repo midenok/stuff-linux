@@ -1,0 +1,36 @@
+#!/bin/bash
+pub_key=$1
+shift
+
+read -r -d '' remote_code <<EOF
+mkdir -p .ssh
+cd .ssh
+tar xz
+cat $pub_key  >> authorized_keys
+chmod g=,o= . authorized_keys $pub_key
+[ -d ~/.mc ] || mkdir -p ~/.mc
+
+for f in ini panels.ini
+do
+    setup/helpers/gen-sed < setup/share/mc/\$f > ~/.mc/\$f.sed
+
+    if [ -f ~/.mc/\$f ]
+    then
+        sed -f "\$HOME/.mc/\$f.sed" -i "\$HOME/.mc/\$f"
+    else
+        f_in="setup/share/mc/\$f"
+        cp -a "\$f_in" ~/.mc/
+        if [ "\$f" = panels.ini ]
+        then
+            sed -e "s/New Left/New Right/" "\$f_in" >> ~/.mc/\$f
+        fi
+    fi
+done
+
+EOF
+
+# tar:
+# ~/.gdbinit
+# FIXME: eliminate ask about 'The authenticity of host'
+
+tar cz $pub_key setup/helpers/gen-sed setup/share/mc/* | ssh -o StrictHostKeyChecking=no "$1" "$remote_code"
