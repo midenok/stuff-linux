@@ -11,6 +11,8 @@ while read line
 do
     [ $line ] ||
         continue
+    [[ $line == [* ]] &&
+        continue
     first=${line%%=*}
     [ $first = $line ] &&
         die "Unkown setting: '${line}' (no =)!"

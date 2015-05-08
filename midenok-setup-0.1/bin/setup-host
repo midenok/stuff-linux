@@ -1,13 +1,16 @@
 #!/bin/bash
-pub_key=$1
-shift
+host=$1
+pub_key=$2
 
 read -r -d '' remote_code <<EOF
 mkdir -p .ssh
 cd .ssh
 tar xz
-cat $pub_key  >> authorized_keys
-chmod g=,o= . authorized_keys $pub_key
+if [ -n "$pub_key" ]
+then
+    cat $pub_key  >> authorized_keys
+    chmod g=,o= . authorized_keys $pub_key
+fi
 [ -d ~/.mc ] || mkdir -p ~/.mc
 
 for f in ini panels.ini
@@ -27,10 +30,10 @@ do
     fi
 done
 
+cp -u setup/share/gdb/.gdbinit "\$HOME"
+bash -l
 EOF
 
 # tar:
 # ~/.gdbinit
-# FIXME: eliminate ask about 'The authenticity of host'
-
-tar cz $pub_key setup/helpers/gen-sed setup/share/mc/* | ssh -o StrictHostKeyChecking=no "$1" "$remote_code"
+tar cz $pub_key setup/helpers setup/share setup/bin | ssh -o StrictHostKeyChecking=no "$host" "$remote_code"
