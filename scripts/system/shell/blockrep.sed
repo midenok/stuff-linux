@@ -1,3 +1,4 @@
+#! /bin/sed -f
 # filename: blockrep.sed
 #   author: Paolo Bonzini
 # Requires:
@@ -15,7 +16,7 @@
 /^----$/! {
    # Escape slashes, backslashes, the final newline and
    # regular expression metacharacters.
-   s,[/\[.*],\\&,g
+   s,[/\[\.*],\\&,g
    s/$/\\/
    H
    #
