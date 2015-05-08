@@ -57,7 +57,7 @@ Now:
 
 1. get corresponding `screenrc` (it must contain same keycodes);
 2. put it to `~/.screenrc`;
-3. important: configure your terminal application to set correct keycodes;
+3. important: configure your terminal application to send correct keycodes;
 4. run `screen`;
 5. Write something on command prompt, then try to switch to another screen with Alt+F2 and return back with Alt+F1.
 
