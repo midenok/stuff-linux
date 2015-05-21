@@ -28,6 +28,7 @@ bind I login on
 bind O login off
 bind } history
 
+# Alt + F1-F12 keys
 bindkey ^[O3P select 0
 bindkey ^[O3Q select 1
 bindkey ^[O3R select 2
@@ -41,10 +42,26 @@ bindkey ^[[21;3~ select 9
 bindkey ^[[23;3~ select 10
 bindkey ^[[24;3~ select 11
 
+# Alt + F1-F4 keys (vt220)
+bindkey ^[[1;3P select 0
+bindkey ^[[1;3Q select 1
+bindkey ^[[1;3R select 2
+bindkey ^[[1;3S select 3
+
 bindkey ^[[Z focus
 bindkey ^[1 only
 bindkey ^[2 split
 bindkey ^[3 split -v
+
+# Ctrl + Shift + F1-F8
+bindkey ^[O6P prev
+bindkey ^[O6Q next
+bindkey ^[O6R windowlist -b
+bindkey ^[O6S copy
+bindkey ^[[15;6~ title
+bindkey ^[[17;6~ split
+bindkey ^[[18;6~ only
+bindkey ^[[19;6~ redisplay
 
 # bindkey ^[[39~ stuff ^[];hello\007
 
