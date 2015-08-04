@@ -14,13 +14,14 @@ sub new
     $class = (ref $class || $class);
 
     my $play_money = Currency->new();
-
+    my $pokerstars_user = $ENV{POKERSTARS_USER} || $ENV{USER};
+    my $pokerstars_home = $ENV{POKERSTARS_HOME} || "$ENV{HOME}/.wine/drive_c/Program Files/PokerStars";
 
     my $self = bless {
         verbose => 0,
         from_date => 0,
         till_date => Date->new(Date::date()),
-        dir => "$ENV{HOME}/.wine/drive_c/Program Files/PokerStars/TournSummary/$ENV{USER}",
+        dir => "${pokerstars_home}/TournSummary/${pokerstars_user}",
         currencies => [ $play_money ], # by default only Play Money will be shown
         total_currency => $play_money
     } => $class;
