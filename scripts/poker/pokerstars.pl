@@ -23,7 +23,9 @@ sub new
         till_date => Date->new(Date::date()),
         dir => "${pokerstars_home}/TournSummary/${pokerstars_user}",
         currencies => [ $play_money ], # by default only Play Money will be shown
-        total_currency => $play_money
+        table => 0, # filter by size. 0 means any table size.
+        total_currency => $play_money,
+        parse_fatal => 1
     } => $class;
 
     $self->get_options();
@@ -74,8 +76,10 @@ sub get_options
         week:i
         weeks=i
         last|days=i
+        table|t=i
         tablo
-        currency=s
+        currency|c=s
+        parse_fatal|parse-fatal|fatal:i
         dump|D+
         verbose|v+
         help|h
@@ -608,6 +612,7 @@ sub new
       conf => $conf,
       dir => Util::chop_slash($conf->{dir}),
       total_sum => PokerStars::TournStats->new($conf->{total_currency}),
+      found_files => 0,
       parsed_days => 0
     } => $class;
 
@@ -623,6 +628,11 @@ sub parse_range
     for (my $day = $from; $day <= $till; ++$day) {
         $self->parse_day($day);
     }
+    if ($self->{found_files} == 0) {
+        print STDERR "Warning: no matching files found in $self->{dir}!\n";
+    } elsif ($self->{parsed_days} == 0) {
+        print STDERR "Warning: no matching tournaments found!\n";
+    }
     return $self;
 }
 
@@ -634,6 +644,7 @@ sub parse_day
     my $date = shift;
     opendir (my $dh, $dir) || die "${dir}: $!\n";
     map {
+        $self->{found_files}++;
         $self->parse_file($_);
     } grep {
         m/^TS${date}.+\.txt$/
@@ -715,6 +726,11 @@ sub parse_file
                 and $d->{bynumber}->{$1} = $t
         } $l[0];
 
+        if ($l[1] !~ m/^Buy-In: / && $l[2] =~ m/^Buy-In: /) {
+            $t->{tournament_type} = $l[1];
+            delete $l[1];
+        }
+
         match {
             m|^Buy-In: ([\$])?(\d[.0-9]*)/([\$])?(\d[.0-9]*)(\s+(USD))?$|
                 and $t->{currency} = Currency->new($1, $6), 1
@@ -727,9 +743,9 @@ sub parse_file
                 and $t->{players} = $1, 1
         } $l[2];
 
-        if ($t->{players} != 2) {
+        if ($c->{table} > 0 && $t->{players} != $c->{table}) {
             if ($c->{verbose}) {
-                print STDERR "Warning: (${file}) ". $t->{players}. "-player tournament skipped!\n";
+                print STDERR "(${file}) ". $t->{players}. "-player tournament skipped!\n";
             }
             return;
         }
@@ -740,9 +756,9 @@ sub parse_file
         } $l[4];
 
         match {
-            m|^You finished in (\d)\D|
+            m|^You finished in (\d+)\D|
                 and $t->{win} = $1 == 1 ? 1 : 0, 1;
-        } $l[9];
+        } $l[7 + $t->{players}];
 
         match {
             m|^  \d: (.+)\s\([^(]+\)[^()]*$|
@@ -754,12 +770,16 @@ sub parse_file
         push @{$d->{byday}->{Date::date($t->{time})}}, $t;
         # $t->{localtime} = [localtime($t->{date})];
     }
+
     catch {
         if ($self->{conf}->{verbose} > 1) {
             print join("\n", @l), "\n";
         }
 
-        die "Parsing failed: ". $self->verbose_file($file). "\n       at line: $_\n";
+        print STDERR "Parsing failed: ". $self->verbose_file($file). "\n       at line: $_\n";
+        if ($c->{parse_fatal}) {
+            die "\n";
+        }
     };
 }
 
