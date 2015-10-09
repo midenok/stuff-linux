@@ -756,7 +756,6 @@ sub parse_file
 
     try {
         my $t = PokerStars::Tournament->new();
-        my $m = PokerStars::ParseMatcher->new(\@l);
 
         match {
             $t->{id} = $1;
