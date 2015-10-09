@@ -85,6 +85,7 @@ sub get_options
         last|days=i
         table|t=i
         tablo
+        tournament_id|tournament-id=i
         currency|c=s
         parse_fatal|parse-fatal|fatal:i
         dump|D+
@@ -464,10 +465,7 @@ sub add_tournament
         if ($t->{buyin} > $self->{max_buyin}) {
             $self->{max_buyin} = $t->{buyin};
         }
-        $self->{profit} -= $t->{buyin};
-        if ($t->{win}) {
-            $self->{profit} += $t->{prize};
-        }
+        $self->{profit} += $t->{prize} - $t->{buyin};
     }
     return $self;
 }
@@ -708,12 +706,15 @@ sub try (&$) {
 
 sub catch (&) { $_[0] }
 
-sub match(&$)
+sub match(&$$)
 {
-    my ($match, $line) = @_;
-    local $_ = $line;
-    &$match or
+    my ($code, $re, $line) = @_;
+    if ($line =~ $re) {
+        local $_ = $line;
+        &$code;
+    } else {
         die $line;
+    }
 }
 
 sub verbose_file
@@ -728,6 +729,9 @@ sub verbose_file
 
     return $file;
 }
+
+our $money_re = qr'([\$])?(\d[.0-9]*)?';
+our $money_full_re = qr"${money_re}(\s+(USD))?";
 
 sub parse_file
 {
@@ -752,14 +756,15 @@ sub parse_file
 
     try {
         my $t = PokerStars::Tournament->new();
+        my $m = PokerStars::ParseMatcher->new(\@l);
 
         match {
-            m/^PokerStars Tournament #(\d+)\D/ and do {
-                $t->{id} = $1;
-                $d->{byid}->{$1} = $t;
-                1;
-            };
-        } $l[0];
+            $t->{id} = $1;
+        } qr'^PokerStars Tournament #(\d+)\D' => $l[0];
+
+        if ($c->{tournament_id} && $c->{tournament_id} != $t->{id}) {
+            return;
+        }
 
         if ($l[1] !~ m/^Buy-In: / && $l[2] =~ m/^Buy-In: /) {
             $t->{tournament_type} = $l[1];
@@ -767,18 +772,14 @@ sub parse_file
         }
 
         match {
-            m|^Buy-In: ([\$])?(\d[.0-9]*)/([\$])?(\d[.0-9]*)(\s+(USD))?$| and do {
-                $t->{buyin_currency} = Currency->new($1, $6);
-                $t->{rake} = $4;
-                $t->{buyin} = $2 + $t->{rake};
-                1;
-            };
-        } $l[1];
+            $t->{buyin_currency} = Currency->new($1, $6);
+            $t->{rake} = $4;
+            $t->{buyin} = $2 + $t->{rake};
+        } qr"^Buy-In: ${money_re}/${money_full_re}$" => $l[1];
 
         match {
-            m|^(\d+) players$|
-                and $t->{players} = $1, 1
-        } $l[2];
+            $t->{players} = $1
+        } qr'^(\d+) players$', $l[2];
 
         if ($c->{table} > 0 && $t->{players} != $c->{table}) {
             if ($c->{verbose}) {
@@ -788,31 +789,43 @@ sub parse_file
         }
 
         match {
-            m|Total Prize Pool: ([\$])?(\d[.0-9]*)(\s+(USD))?| and do {
-                $t->{prize_currency} = Currency->new($1, $4);
-                $t->{prize} = $2;
-                1;
-            };
-        } $l[3];
+            $t->{prize_currency} = Currency->new($1, $4);
+            $t->{total_prize} = $2;
+        } qr"Total Prize Pool: ${money_full_re}" => $l[3];
 
         match {
-            m|^Tournament started (.+) \[(.+)\]$|
-                and $t->{time} = str2time($1)
-        } $l[4];
+            $t->{time} = str2time($1)
+        } qr'^Tournament started (.+) \[(.+)\]$|' => $l[4];
+
+        for (my $i = 6; $i < 6 + $t->{players}; ++$i) {
+            match {
+                my $player = $1;
+                my $country = $2;
+                my $prize = $5;
+                my $percentage = $6;
+                if ($player eq $c->{user}) {
+                    $t->{prize} = $prize || 0;
+                    $t->{prize_percentage} = $percentage || 0;
+                } else {
+                    push @{$t->{opponents}}, {
+                        nickname => $player,
+                        country => $country,
+                        prize => $prize,
+                        prize_percentage => $percentage
+                    };
+                }
+            } qr"^  \d: ([^(].+) \(([^)]+)\),( ${money_re} \((\d[.0-9]*)%\))?" => $l[$i];
+        }
 
         match {
-            m|^You finished in (\d+)\D|
-                and $t->{win} = $1 == 1 ? 1 : 0, 1;
-        } $l[7 + $t->{players}];
-
-        match {
-            m|^  \d: (.+)\s\([^(]+\)[^()]*$|
-                and $t->{opponent} = $1;
-        } $l[$t->{win} ? 7 : 6];
+            $t->{place} = $1;
+            $t->{win} = $1 == 1 ? 1 : 0, 1;
+        } qr'^You finished in (\d+)\D' => $l[7 + $t->{players}];
 
         $t->{duration} = $mtime - $t->{time};
 
         push @{$d->{byday}->{Date::date($t->{time})}}, $t;
+        $d->{byid}->{$t->{id}} = $t;
         # $t->{localtime} = [localtime($t->{date})];
     }
 
