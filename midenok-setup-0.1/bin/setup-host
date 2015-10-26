@@ -12,21 +12,29 @@ then
     cat $pub_key  >> authorized_keys
     chmod g=,o= . authorized_keys $pub_key
 fi
-[ -d ~/.mc ] || mkdir -p ~/.mc
+
+if [ -d ~/.config ]
+then
+    mc_dir=\$HOME/.config/mc
+else
+    mc_dir=\$HOME/.mc
+fi
+
+[ -d \$mc_dir ] || mkdir -p \$mc_dir
 
 for f in ini panels.ini
 do
-    setup/helpers/ini2sed < setup/share/mc/\$f > ~/.mc/\$f.sed
+    setup/helpers/ini2sed < setup/share/mc/\$f > \$mc_dir/\$f.sed
 
-    if [ -f ~/.mc/\$f ]
+    if [ -f \$mc_dir/\$f ]
     then
-        sed -f "\$HOME/.mc/\$f.sed" -i "\$HOME/.mc/\$f"
+        sed -f "\$mc_dir/\$f.sed" -i "\$mc_dir/\$f"
     else
         f_in="setup/share/mc/\$f"
-        cp -a "\$f_in" ~/.mc/
+        cp -a "\$f_in" \$mc_dir
         if [ "\$f" = panels.ini ]
         then
-            sed -e "s/New Left/New Right/" "\$f_in" >> ~/.mc/\$f
+            sed -e "s/New Left/New Right/" "\$f_in" >> \$mc_dir/\$f
         fi
     fi
 done
