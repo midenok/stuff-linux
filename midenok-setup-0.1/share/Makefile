@@ -1,10 +1,10 @@
-gen-sed = ../helpers/gen-sed
+ini2sed = ../helpers/ini2sed
 mc-files = $(notdir $(wildcard mc/*))
 outdir = $(DESTINSTALLSHARE)
 sed-files = $(addsuffix .sed,$(addprefix $(outdir)/,$(mc-files)))
 
 $(outdir)/%.sed : mc/%
-	$(gen-sed) < $< > $@
+	$(ini2sed) < $< > $@
 
 install :: $(sed-files)
 
