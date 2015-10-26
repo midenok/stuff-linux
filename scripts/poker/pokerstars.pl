@@ -7,6 +7,15 @@ use Pod::Usage;
 use Data::Dumper;
 use strict;
 
+our %DEFAULTS = (
+    windows => {
+        pokerstars_home => "$ENV{LOCALAPPDATA}/PokerStars"
+    },
+    unix => {
+        pokerstars_home =>  "$ENV{HOME}/.wine/drive_c/Program Files/PokerStars"
+    }
+);
+
 
 sub new
 {
@@ -15,14 +24,14 @@ sub new
 
     my $play_money = Currency->new();
 
-
     my $self = bless {
         verbose => 0,
         from_date => 0,
         till_date => Date->new(Date::date()),
-        dir => "$ENV{HOME}/.wine/drive_c/Program Files/PokerStars/TournSummary/$ENV{USER}",
         currencies => [ $play_money ], # by default only Play Money will be shown
-        total_currency => $play_money
+        table => 0, # filter by size. 0 means any table size.
+        total_currency => $play_money,
+        parse_fatal => 1
     } => $class;
 
     $self->get_options();
@@ -66,6 +75,7 @@ sub get_options
 
     GetOptions ($c, qw(
         dir=s
+        user=s
         today
         day=s
         from_date_str|from-date|from=s
@@ -73,8 +83,11 @@ sub get_options
         week:i
         weeks=i
         last|days=i
+        table|t=i
         tablo
-        currency=s
+        tournament_id|tournament-id=i
+        currency|c=s
+        parse_fatal|parse-fatal|fatal:i
         dump|D+
         verbose|v+
         help|h
@@ -152,6 +165,17 @@ sub process_options
 
     if ($c->{currency}) {
         $c->{currencies} = Currency::parse($c->{currency});
+        $c->{total_currency} = $c->{currencies}->[0];
+    }
+
+    if (!$c->{user}) {
+        $c->{user} = $ENV{POKERSTARS_USER} || $ENV{USER};
+    }
+
+    if (!$c->{dir}) {
+        my $os = ($ENV{OS} =~ m/windows/i) ? 'windows' : 'unix';
+        my $pokerstars_home = $ENV{POKERSTARS_HOME} || $DEFAULTS{$os}->{pokerstars_home};
+        $c->{dir} = "${pokerstars_home}/TournSummary/$c->{user}";
     }
 }
 
@@ -333,16 +357,25 @@ sub new
 sub format_sum
 {
     my $b = shift;
-    if ($b >= 1000 || $b <= -1000) {
-        $b = $b / 1000 . "k";
+    my $prefix = shift || '';
+    my $t = $b < 0 ? 0 - $b : $b;
+    if ($t >= 1000) {
+        $t = $t / 1000 . "k";
     }
-    return $b;
+    $t = ${prefix} . ${t};
+    return $b < 0 ? "-${t}" : $t;
 }
 
 sub buyin
 {
     my $self = shift;
-    return format_sum($self->{buyin} + $self->{rake});
+    return format_sum($self->{buyin}, $self->{buyin_currency}->{prefix});
+}
+
+sub prize
+{
+    my $self = shift;
+    return format_sum($self->{prize}, $self->{prize_currency}->{prefix});
 }
 
 sub time
@@ -417,21 +450,22 @@ sub add_tournament
     $self->{play_time} += $t->{duration};
     $self->{wins} += $t->{win};
 
-    $self->{currency} = $t->{currency}
+    $self->{currency} = $t->{buyin_currency}
         unless defined $self->{currency};
 
-    if ($self->{currency} == $t->{currency}) {
+    if ($self->{currency} == $t->{buyin_currency}) {
+        if ($t->{buyin_currency} != $t->{prize_currency}) {
+            print STDERR "Won't convert prize $t->{prize_currency} to buyin $t->{buyin_currency}: tournament $t->{id} is skipped!";
+            return $self;
+        }
+
         if (!$self->{min_buyin} || $self->{min_buyin} > $t->{buyin}) {
-            $self->{min_buyin} = $t->{buyin} + $t->{rake};
+            $self->{min_buyin} = $t->{buyin};
         }
         if ($t->{buyin} > $self->{max_buyin}) {
-            $self->{max_buyin} = $t->{buyin} + $t->{rake};
+            $self->{max_buyin} = $t->{buyin};
         }
-        if ($t->{win}) {
-            $self->{profit} += $t->{buyin} - $t->{rake};
-        } else {
-            $self->{profit} -= $t->{buyin} + $t->{rake};
-        }
+        $self->{profit} += $t->{prize} - $t->{buyin};
     }
     return $self;
 }
@@ -488,16 +522,16 @@ sub losses
 sub buyin_range
 {
     my $self = shift;
-    return PokerStars::Tournament::format_sum($self->{min_buyin}) .
+    return PokerStars::Tournament::format_sum($self->{min_buyin}, $self->{currency}->{prefix}) .
         ($self->{min_buyin} != $self->{max_buyin} ? '-' .
-            PokerStars::Tournament::format_sum($self->{max_buyin}) : '');
+            PokerStars::Tournament::format_sum($self->{max_buyin}, $self->{currency}->{prefix}) : '');
 }
 
 sub profit_loss
 {
     my $self = shift;
     return ($self->{profit} > 0 ? 'profit ' : 'loss ').
-        PokerStars::Tournament::format_sum($self->{profit});
+        PokerStars::Tournament::format_sum($self->{profit}, $self->{currency}->{prefix});
 }
 
 sub profit_detail
@@ -530,7 +564,8 @@ use strict;
 
 use overload
     '""' => \&operator_stringify,
-    '==' => \&operator_eq;
+    '==' => \&operator_eq,
+    '!=' => sub { !operator_eq(@_) };
 
 our %names = (
     '' => 'Play Money',
@@ -540,15 +575,15 @@ our %names = (
 sub new
 {
     my $class = shift;
-    my $abbrev = shift || '';
+    my $prefix = shift || '';
 
     $class = (ref $class || $class);
     my $self = bless {
-        abbrev => $abbrev,
-        name => $names{$abbrev}
+        prefix => $prefix,
+        name => $names{$prefix}
     } => $class;
 
-    die "Unknown currency: $abbrev\n"
+    die "Unknown currency: $prefix\n"
         unless defined $self->{name};
 
     return $self;
@@ -564,23 +599,23 @@ sub operator_eq
 {
     my $a = shift;
     my $b = shift;
-    return $a->{abbrev} eq $b->{abbrev};
+    return $a->{prefix} eq $b->{prefix};
 }
 
 sub parse
 {
     my $param = shift;
-    my @abbrevs;
+    my @prefices;
 
     if ($param eq 'all') {
-        @abbrevs = keys %names;
+        @prefices = keys %names;
     } else {
-        @abbrevs = split(',', $param);
+        @prefices = split(',', $param);
     }
 
     my @currencies;
-    for my $abbrev (@abbrevs) {
-        push @currencies, __PACKAGE__->new($abbrev);
+    for my $prefix (@prefices) {
+        push @currencies, __PACKAGE__->new($prefix);
     }
     return \@currencies;
 }
@@ -607,6 +642,7 @@ sub new
       conf => $conf,
       dir => Util::chop_slash($conf->{dir}),
       total_sum => PokerStars::TournStats->new($conf->{total_currency}),
+      found_files => 0,
       parsed_days => 0
     } => $class;
 
@@ -622,6 +658,11 @@ sub parse_range
     for (my $day = $from; $day <= $till; ++$day) {
         $self->parse_day($day);
     }
+    if ($self->{found_files} == 0) {
+        print STDERR "Warning: no matching files found in $self->{dir}!\n";
+    } elsif ($self->{parsed_days} == 0) {
+        print STDERR "Warning: no matching tournaments found!\n";
+    }
     return $self;
 }
 
@@ -633,6 +674,7 @@ sub parse_day
     my $date = shift;
     opendir (my $dh, $dir) || die "${dir}: $!\n";
     map {
+        $self->{found_files}++;
         $self->parse_file($_);
     } grep {
         m/^TS${date}.+\.txt$/
@@ -664,12 +706,15 @@ sub try (&$) {
 
 sub catch (&) { $_[0] }
 
-sub match(&$)
+sub match(&$$)
 {
-    my ($match, $line) = @_;
-    local $_ = $line;
-    &$match or
+    my ($code, $re, $line) = @_;
+    if ($line =~ $re) {
+        local $_ = $line;
+        &$code;
+    } else {
         die $line;
+    }
 }
 
 sub verbose_file
@@ -684,6 +729,9 @@ sub verbose_file
 
     return $file;
 }
+
+our $money_re = qr'([\$])?(\d[.0-9]*)?';
+our $money_full_re = qr"${money_re}(\s+(USD))?";
 
 sub parse_file
 {
@@ -710,55 +758,85 @@ sub parse_file
         my $t = PokerStars::Tournament->new();
 
         match {
-            m/^PokerStars Tournament #(\d+)\D/
-                and $d->{bynumber}->{$1} = $t
-        } $l[0];
+            $t->{id} = $1;
+        } qr'^PokerStars Tournament #(\d+)\D' => $l[0];
+
+        if ($c->{tournament_id} && $c->{tournament_id} != $t->{id}) {
+            return;
+        }
+
+        if ($l[1] !~ m/^Buy-In: / && $l[2] =~ m/^Buy-In: /) {
+            $t->{tournament_type} = $l[1];
+            delete $l[1];
+        }
 
         match {
-            m|^Buy-In: ([\$])?(\d[.0-9]*)/([\$])?(\d[.0-9]*)(\s+(USD))?$|
-                and $t->{currency} = Currency->new($1, $6), 1
-                and $t->{buyin} = $2, 1
-                and $t->{rake} = $4, 1
-        } $l[1];
+            $t->{buyin_currency} = Currency->new($1, $6);
+            $t->{rake} = $4;
+            $t->{buyin} = $2 + $t->{rake};
+        } qr"^Buy-In: ${money_re}/${money_full_re}$" => $l[1];
 
         match {
-            m|^(\d+) players$|
-                and $t->{players} = $1, 1
-        } $l[2];
+            $t->{players} = $1
+        } qr'^(\d+) players$', $l[2];
 
-        if ($t->{players} != 2) {
+        if ($c->{table} > 0 && $t->{players} != $c->{table}) {
             if ($c->{verbose}) {
-                print STDERR "Warning: (${file}) ". $t->{players}. "-player tournament skipped!\n";
+                print STDERR "(${file}) ". $t->{players}. "-player tournament skipped!\n";
             }
             return;
         }
 
         match {
-            m|^Tournament started (.+) \[(.+)\]$|
-                and $t->{time} = str2time($1)
-        } $l[4];
+            $t->{prize_currency} = Currency->new($1, $4);
+            $t->{total_prize} = $2;
+        } qr"Total Prize Pool: ${money_full_re}" => $l[3];
 
         match {
-            m|^You finished in (\d)\D|
-                and $t->{win} = $1 == 1 ? 1 : 0, 1;
-        } $l[9];
+            $t->{time} = str2time($1)
+        } qr'^Tournament started (.+) \[(.+)\]$|' => $l[4];
+
+        for (my $i = 6; $i < 6 + $t->{players}; ++$i) {
+            match {
+                my $player = $1;
+                my $country = $2;
+                my $prize = $5;
+                my $percentage = $6;
+                if ($player eq $c->{user}) {
+                    $t->{prize} = $prize || 0;
+                    $t->{prize_percentage} = $percentage || 0;
+                } else {
+                    push @{$t->{opponents}}, {
+                        nickname => $player,
+                        country => $country,
+                        prize => $prize,
+                        prize_percentage => $percentage
+                    };
+                }
+            } qr"^  \d: ([^(].+) \(([^)]+)\),( ${money_re} \((\d[.0-9]*)%\))?" => $l[$i];
+        }
 
         match {
-            m|^  \d: (.+)\s\([^(]+\)[^()]*$|
-                and $t->{opponent} = $1;
-        } $l[$t->{win} ? 7 : 6];
+            $t->{place} = $1;
+            $t->{win} = $1 == 1 ? 1 : 0, 1;
+        } qr'^You finished in (\d+)\D' => $l[7 + $t->{players}];
 
         $t->{duration} = $mtime - $t->{time};
 
         push @{$d->{byday}->{Date::date($t->{time})}}, $t;
+        $d->{byid}->{$t->{id}} = $t;
         # $t->{localtime} = [localtime($t->{date})];
     }
+
     catch {
         if ($self->{conf}->{verbose} > 1) {
             print join("\n", @l), "\n";
         }
 
-        die "Parsing failed: ". $self->verbose_file($file). "\n       at line: $_\n";
+        print STDERR "Parsing failed: ". $self->verbose_file($file). "\n       at line: $_\n";
+        if ($c->{parse_fatal}) {
+            die "\n";
+        }
     };
 }
 
@@ -788,7 +866,7 @@ sub tablo
     my $currency = shift;
 
     my @tourns = grep {
-        $_->{currency} == $currency
+        $_->{buyin_currency} == $currency
     } @{$self->byday($date)};
     my $tourns_n = @tourns;
 
