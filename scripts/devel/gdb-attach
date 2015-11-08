@@ -1,0 +1,92 @@
+#!/bin/sh
+daemon=httpd
+
+if [ "$1" ]
+then
+    daemon=$1
+    shift
+fi
+
+unset task_num
+if [ "$1" ]
+then
+    if [ "$1" != "*" ]
+    then
+        task_num=$1
+    fi
+    shift
+fi
+
+unset attach_child
+
+case $daemon in
+httpd*|apache)
+    daemon=httpd.worker
+    attach_child=1
+    ;;
+cm)
+    daemon=CampaignManager
+    unset attach_child
+    ;;
+rim)
+    daemon=RequestInfoManager
+    unset attach_child
+    ;;
+em)
+    daemon=ExpressionMatcher
+    unset attach_child
+    ;;
+cs)
+    daemon=CampaignServer
+    unset attach_child
+    ;;
+chs)
+    daemon=ChannelServer
+    unset attach_child
+    ;;
+esac
+
+pid=$(ps --no-headers U $(whoami) -o pid,ppid,command|(
+    while read pid ppid cmd args
+    do
+        [ -z "${cmd/*${daemon}*}" ] || continue
+        [ -n "${task_num}" -a -n "${args/*${task_num}*}" ] && continue
+        if [ $attach_child ]
+        then
+            if [ $ppid = 1 ]
+            then
+                parent=$pid
+            else
+                children="${children:+${children} }${pid},${ppid}"
+            fi
+        else
+            echo $pid
+            break
+        fi
+    done
+
+    for child in $children
+    do
+        pid=${child%%,*}
+        ppid=${child##*,}
+        if [ $ppid = $parent ]
+        then
+            echo $pid
+            break
+        fi
+    done
+))
+
+[ -z "${pid}" ] && {
+    echo ${daemon} pid not found! >&2
+    exit 1
+}
+
+tmp=$(mktemp /tmp/gdb.XXXXXXXXXX)
+cat > $tmp <<-EOF
+    attach $pid
+    shell rm $tmp
+EOF
+
+echo Attaching to $pid
+exec gdb -x $tmp "$@"

@@ -1,0 +1,85 @@
+#!/bin/bash
+# This utility attaches when new $daemon appears listening on $port
+# and collects various stacks from thrown exceptions.
+# Stacks are collected into $HOME/gdb.${pid}.log
+
+daemon=RequestInfoManager
+port=10120
+interval=5
+cmd=${1:-process_pid}
+
+get_daemon_pid()
+{
+    netstat_info=$(netstat -ntpl| grep "127.0.0.1:${port}")
+    [ -z "$netstat_info" ] &&
+        return 1
+
+    local pid=$(ps --no-header -C $daemon -o pid |
+        while read pid other
+        do
+            if grep -q $pid <<< $netstat_info
+            then
+                echo $pid
+                break
+            fi
+        done
+    )
+    [ -z "$pid" ] &&
+        return 1
+    eval $1=$pid
+    return 0
+}
+
+process_pid()
+{
+    local pid=$1
+    local tmp=$(mktemp /tmp/gdb.XXXXXXXXXX)
+    local conds=$(mktemp /tmp/conditions.XXXXXXXXXX)
+
+    echo "condition 1 1" > $conds
+
+    cat > $tmp <<-EOF
+        shell rm $tmp
+        attach $pid
+        catch throw
+        commands
+            bt
+            eval "shell echo -n ' && ((long *)$fp)[1] != 0x%lx' >> $conds", ((long *)$fp)[1]
+            source $conds
+            c
+        end
+        b _exit
+        commands
+            detach
+            quit
+        end
+        set logging file $HOME/gdb.${pid}.log
+        set logging overwrite off
+        set logging on
+        info proc
+        echo Conditions file: $conds\n
+        c
+EOF
+    echo Conditions are collecting to $conds
+    echo Attaching to $pid
+    gdb -x $tmp "$@"
+    rm "$conds"
+}
+
+echo_pid()
+{
+    echo $1
+}
+
+prev_pid=0
+
+while true
+do
+    if get_daemon_pid daemon_pid &&
+        [ $prev_pid != $daemon_pid ]
+    then
+        $cmd $daemon_pid
+        prev_pid=$daemon_pid
+    fi
+    sleep $interval
+done

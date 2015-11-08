@@ -1,0 +1,4 @@
+#!/bin/sh
+red=$(tput bold;tput setaf 1)
+normal=$(tput sgr0)
+sed -u -e "s/\($1\)/$red\1$normal/g"

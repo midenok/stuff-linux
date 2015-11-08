@@ -1,0 +1,2 @@
+#!/bin/sh
+tar -cvpzf $(hostname).tar.gz /bin /etc /lib /lib64 /opt /sbin /usr /var
