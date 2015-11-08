@@ -24,26 +24,6 @@ httpd*|apache)
     daemon=httpd.worker
     attach_child=1
     ;;
-cm)
-    daemon=CampaignManager
-    unset attach_child
-    ;;
-rim)
-    daemon=RequestInfoManager
-    unset attach_child
-    ;;
-em)
-    daemon=ExpressionMatcher
-    unset attach_child
-    ;;
-cs)
-    daemon=CampaignServer
-    unset attach_child
-    ;;
-chs)
-    daemon=ChannelServer
-    unset attach_child
-    ;;
 esac
 
 pid=$(ps --no-headers U $(whoami) -o pid,ppid,command|(
