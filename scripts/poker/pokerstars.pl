@@ -22,20 +22,32 @@ sub new
     my $class = shift;
     $class = (ref $class || $class);
 
-    my $play_money = Currency->new();
+    my $usd = Currency->new('$');
 
     my $self = bless {
         verbose => 0,
         from_date => 0,
         till_date => Date->new(Date::date()),
-        currencies => [ $play_money ], # by default only Play Money will be shown
-        table => 0, # filter by size. 0 means any table size.
-        total_currency => $play_money,
+        command => 'tablo',
+        currencies => [ $usd ], # by default only USD games will be shown
+        players => 0, # filter by players on table. 0 means any table size.
+        total_currency => $usd,
         parse_fatal => 1
     } => $class;
 
     $self->get_options();
     return $self;
+}
+
+sub require_options
+{
+    my $c = shift;
+    my @missed = grep {
+        not defined $c->{$_}
+    } @_;
+    if (@missed) {
+        die "Required options missed: ", join(", ", map("--$_", @missed)), "\n";
+    }
 }
 
 sub dump
@@ -83,12 +95,15 @@ sub get_options
         week:i
         weeks=i
         last|days=i
-        table|t=i
+        players|p=i
+        command|cmd=s
         tablo
+        list
         tournament_id|tournament-id=i
         currency|c=s
         parse_fatal|parse-fatal|fatal:i
         dump|D+
+        dump_files|dump-files|Df
         verbose|v+
         help|h
     )) or exit 1;
@@ -121,6 +136,13 @@ sub process_options
             $range_arg = $1;
             $c->{$range_arg} = Date->new($c->{$arg});
         }
+    }
+
+    for my $arg (qw[tablo list]) {
+        if ($c->{$arg}) {
+            $c->{command} = $arg;
+        }
+        delete $c->{$arg};
     }
 
     if (exists $c->{day}) {
@@ -192,9 +214,13 @@ use overload
     "<=" => \&operator_le,
     "<" => \&operator_lt,
     "++" => \&operator_pp,
+    "--" => \&operator_mm,
+    "+" => \&operator_plus,
+    "-" => \&operator_minus,
     '""' => \&operator_stringify,
     "=" => \&operator_assign,
-    "-=" => \&operator_subassign;
+    "-=" => \&operator_subassign,
+    "==" => \&operator_equal;
 
 my $now = time;
 my $now_tm = localtime($now);
@@ -211,7 +237,11 @@ sub new
     => $class;
 
     if (ref(\$date) eq 'SCALAR' && defined $date) {
-        $self->parse_date($date);
+        if ($date eq 'time') {
+            $self->assign_time(shift);
+        } else {
+            $self->parse_date($date);
+        }
     }
     return $self;
 }
@@ -235,12 +265,29 @@ sub weekday
     return $weekday ? $weekday : 7;
 }
 
+our %TZALIAS = (
+    ET => 'EST',
+    CUST => 'GMT+7'
+);
+
+sub parse
+{
+    my $date = shift;
+    for my $a (keys %TZALIAS) {
+        $date =~ s/(\s)$a\s*$/$1$TZALIAS{$a}/
+            and last;
+    }
+    my $t = str2time($date, @_)
+        or die("Can't parse date: ", $date, "\n");
+    return $t;
+}
+
 sub assign_date()
 {
     my $self = shift;
     my $date = shift;
     $self->{date} = $date;
-    $self->{time} = str2time($date);
+    $self->{time} = parse($date);
     return $self;
 }
 
@@ -275,7 +322,7 @@ sub parse_date()
     } elsif (m/^-(\d+)$/) {
         return $self->assign_time($now - $1 * 24 * 3600);
     }
-    return $self->assign_time(str2time($date)
+    return $self->assign_time(parse($date)
         or die "Wrong date format: ${_}\n");
 }
 
@@ -302,6 +349,29 @@ sub operator_pp
     return $self;
 }
 
+sub operator_mm
+{
+    my $self = shift;
+    $self->assign_time($self->{time} - 24 * 3600);
+    return $self;
+}
+
+sub operator_plus
+{
+    my $self = Date->new(shift);
+    my $days = shift;
+    $self->assign_time($self->{time} + 24 * 3600 * $days);
+    return $self;
+}
+
+sub operator_minus
+{
+    my $self = Date->new(shift);
+    my $days = shift;
+    $self->assign_time($self->{time} - 24 * 3600 * $days);
+    return $self;
+}
+
 sub operator_stringify
 {
     my $self = shift;
@@ -320,6 +390,23 @@ sub operator_subassign
     my $arg = shift;
     $self->assign_time($self->{time} - $arg * 24 * 3600);
     return $self;
+}
+
+sub operator_equal
+{
+    my $left = shift;
+    my $right = shift;
+    my $res = 0;
+    if (ref($right) ne 'Date') {
+        $right = Date->new(time => $right);
+    }
+    if ($left->{date} == $right->{date}) {
+        $res++;
+        if ($left->{time} == $right->{time}) {
+            $res++;
+        }
+    }
+    return $res;
 }
 
 1;
@@ -396,10 +483,20 @@ sub winlossXO
     return $self->{win} ? 'X' : 'O';
 }
 
+sub play_time
+{
+    my $self = shift;
+    return Util::play_time_short($self->{duration});
+}
+
 sub line
 {
     my $self = shift;
-    return $self->time(), "  ", $self->buyin(), "  ", $self->winloss(), "  ", $self->{opponent};
+    format line =
+@<<<<
+$self->time()
+.
+    return $self->time(), "  ", $self->play_time(), " ", $self->buyin(), "  ", $self->winlossXO(), "  ", $self->{opponent}, "#$self->{id}";
 }
 
 1;
@@ -542,12 +639,32 @@ sub profit_detail
         $self->profit_loss(). ')';
 }
 
-our @time_units = (qw(d h m s));
+sub score_profit_detail
+{
+    my $self = shift;
+    return $self->score(). ' ('.
+        $self->{wins}. ':'. $self->losses(). '; '.
+        $self->buyin_range(). '; '.
+        $self->profit_loss(). ')';
+}
 
 sub play_time
 {
     my $self = shift;
-    my @play_time = (gmtime $self->{play_time})[7, 2, 1, 0];
+    return Util::play_time($self->{play_time});
+}
+
+1;
+
+package Util;
+
+our @time_units = (qw(d h m s));
+our @capacity = (24 * 60 * 60, 60 * 60, 60, 1);
+
+sub play_time
+{
+    my $time = shift;
+    my @play_time = (gmtime $time)[7, 2, 1, 0];
     my $rs = '';
     my $out = '';
     for (my $i = 0; $i < @time_units; ++$i) {
@@ -555,6 +672,25 @@ sub play_time
             if $play_time[$i];
     }
     return $out;
+}
+
+sub play_time_short
+{
+    my $time = shift;
+    my @play_time = (gmtime $time)[7, 2, 1, 0];
+    for (my $i = 0; $i < @time_units; ++$i) {
+        if ($play_time[$i]) {
+            my $fraction;
+            if ($i < @time_units - 1) {
+                my $rest;
+                for (my $j = $i + 1; $j < @time_units; ++$j) {
+                    $rest += $play_time[$j] * $capacity[$j];
+                }
+                $fraction = $rest / $capacity[$i];
+            }
+            return (sprintf("%.1f", $play_time[$i] + $fraction) + 0). $time_units[$i];
+        }
+    }
 }
 
 1;
@@ -569,6 +705,7 @@ use overload
 
 our %names = (
     '' => 'Play Money',
+    'F' => 'Freeroll',
     '$' => 'USD'
 );
 
@@ -632,6 +769,7 @@ use strict;
 use Date::Format;
 use Date::Parse;
 use Data::Dumper;
+use Carp;
 
 sub new
 {
@@ -643,7 +781,8 @@ sub new
       dir => Util::chop_slash($conf->{dir}),
       total_sum => PokerStars::TournStats->new($conf->{total_currency}),
       found_files => 0,
-      parsed_days => 0
+      parsed_days => 0,
+      dir_list => undef
     } => $class;
 
     return $self;
@@ -666,19 +805,43 @@ sub parse_range
     return $self;
 }
 
+sub read_dir
+{
+    my $self = shift;
+    return $self->{dir_list} if $self->{dir_list};
+    my $dir = $self->{dir};
+    opendir (my $dh, $dir) || die "${dir}: $!\n";
+    $self->{dir_list} = [map {
+            {
+                file => $_,
+                full_file => undef,
+                mtime => 0
+            }
+        } readdir $dh];
+    closedir $dh;
+    return $self->{dir_list};
+}
+
 sub parse_day
 {
     my $self = shift;
-    my $dir = $self->{dir};
-
     my $date = shift;
-    opendir (my $dh, $dir) || die "${dir}: $!\n";
+    # date in filename is always in ET, which may be different from current timezone
+    my $date0 = $date - 1;
+    my $date1 = $date + 1;
+
     map {
         $self->{found_files}++;
         $self->parse_file($_);
     } grep {
-        m/^TS${date}.+\.txt$/
-    } readdir $dh;
+        $_->{full_file} = $self->{dir}. "/". $_->{file};
+        if (not $_->{mtime}) {
+            $_->{mtime} = (stat $_->{full_file})[9];
+        }
+        $date == $_->{mtime};
+    } grep {
+        $_->{file} =~ m/^TS(${date0}|${date}|${date1}).+\.txt$/
+    } @{$self->read_dir};
 
      my $d = $self->{data};
      if (exists $d->{byday}->{$date}) {
@@ -737,21 +900,25 @@ sub parse_file
 {
     my $self = shift;
     my $c = $self->{conf};
-    my $file = shift;
+    my $f = shift;
     my $dir = $self->{dir};
-    my $full_file = $dir. "/". $file;
+    my $file = $f->{file};
+    my $full_file = $f->{full_file};
+    my $mtime = $f->{mtime};
+
+    if (exists $self->{parsed}->{$file}) {
+        confess "File was already parsed: $file";
+    }
 
     if (ref($self->{data}) ne 'HASH') {
         $self->{data} = {};
     }
 
     my $d = $self->{data};
-
     my $turnament;
 
     open F, "<", $full_file or die $self->verbose_file($file). ": $!\n";
     my @l = map { chomp; s/\r$//; $_ } <F>;
-    my $mtime = (stat(F))[9];
     close F;
 
     try {
@@ -770,17 +937,23 @@ sub parse_file
             delete $l[1];
         }
 
+        if ($l[1] =~ m/^Freeroll/) {
+            $t->{buyin_currency} = Currency->new('F');
+            $t->{rake} = 0;
+            $t->{buyin} = 0;
+        } else {
         match {
             $t->{buyin_currency} = Currency->new($1, $6);
             $t->{rake} = $4;
             $t->{buyin} = $2 + $t->{rake};
         } qr"^Buy-In: ${money_re}/${money_full_re}$" => $l[1];
+        }
 
         match {
             $t->{players} = $1
         } qr'^(\d+) players$', $l[2];
 
-        if ($c->{table} > 0 && $t->{players} != $c->{table}) {
+        if ($c->{players} > 0 && $t->{players} != $c->{players}) {
             if ($c->{verbose}) {
                 print STDERR "(${file}) ". $t->{players}. "-player tournament skipped!\n";
             }
@@ -793,8 +966,8 @@ sub parse_file
         } qr"Total Prize Pool: ${money_full_re}" => $l[3];
 
         match {
-            $t->{time} = str2time($1)
-        } qr'^Tournament started (.+) \[(.+)\]$|' => $l[4];
+            $t->{time} = Date::parse($1);
+        } qr'^Tournament started ([^[]+)(\[(.+)\])?$' => $l[4];
 
         for (my $i = 6; $i < 6 + $t->{players}; ++$i) {
             match {
@@ -827,7 +1000,6 @@ sub parse_file
         $d->{byid}->{$t->{id}} = $t;
         # $t->{localtime} = [localtime($t->{date})];
     }
-
     catch {
         if ($self->{conf}->{verbose} > 1) {
             print join("\n", @l), "\n";
@@ -838,6 +1010,10 @@ sub parse_file
             die "\n";
         }
     };
+
+    if ($c->{dump_files}) {
+        print $file, "\n";
+    }
 }
 
 sub byday
@@ -852,9 +1028,25 @@ sub byday
 sub list_day
 {
     my $self = shift;
-    my $date = Util::date(shift);
+    my $date = shift;
+
+    my $tourns = $self->byday($date);
+    my $sum = PokerStars::TournStats->new();
+    $sum += $tourns;
+    $self->{total_sum} += $sum;
+
+    print $date->formatted(). ": ". @$tourns. " games; ". $sum->score_profit_detail(). "; ". $sum->play_time(). "\n";
 
     for my $t (@{$self->byday($date)}) {
+        print $t->line(), "\n";
+    }
+}
+
+sub list
+{
+    my $self = shift;
+
+    for my $t (@{$self->{data}->{all}}) {
         print $t->line(), "\n";
     }
 }
@@ -906,34 +1098,50 @@ sub dump
 package main;
 use strict;
 
-my $c = Config->new();
+our $c = Config->new();
 
 my $dir = $ARGV[0] || $c->{dir} || '.';
 $c->{dir} = $dir;
-my $p = PokerStars::TournSummary->new($c);
+our $p = PokerStars::TournSummary->new($c);
 
 $p->parse_range($c->{from_date}, $c->{till_date});
 $c->dump($p->{data});
 
-my $tablos = 0;
+&{\&{$c->{command}}};
 
-for (my $d = $c->{from_date}; $d <= $c->{till_date}; ++$d) {
-    if (@{$p->byday($d)} == 0) {
-        next;
+sub tablo
+{
+    my $tablos = 0;
+
+    for (my $d = $c->{from_date}; $d <= $c->{till_date}; ++$d) {
+        if (@{$p->byday($d)} == 0) {
+            next;
+        }
+
+        for my $currency (@{$c->{currencies}}) {
+            $p->tablo($d, $currency);
+            print "\n";
+            ++$tablos;
+        }
     }
 
-    for my $currency (@{$c->{currencies}}) {
-        $p->tablo($d, $currency);
-        print "\n";
-        ++$tablos;
+    if ($tablos > 1) {
+        my $sum = $p->{total_sum};
+        print "Total for $p->{parsed_days} days: ",
+            $sum->score_detail(), ' ',
+            $sum->profit_detail(), "; play time: ", $sum->play_time(), "\n";
     }
 }
 
-if ($tablos > 1) {
-    my $sum = $p->{total_sum};
-    print "Total for $p->{parsed_days} days: ",
-        $sum->score_detail(), ' ',
-        $sum->profit_detail(), "; play time: ", $sum->play_time(), "\n";
+sub list
+{
+    for (my $d = $c->{from_date}; $d <= $c->{till_date}; ++$d) {
+        if (@{$p->byday($d)} == 0) {
+            next;
+        }
+
+        $p->list_day($d);
+    }
 }
 
 1;
