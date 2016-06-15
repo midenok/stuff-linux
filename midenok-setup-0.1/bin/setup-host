@@ -3,51 +3,65 @@ host=$1
 pub_key=$2
 setup_root=1
 
+read -r -d '' setup_mc <<'EOF'
+if [ -d ~/.config ]
+then
+    mc_dir=$HOME/.config/mc
+else
+    mc_dir=$HOME/.mc
+fi
+
+[ -d $mc_dir ] || mkdir -p $mc_dir
+
+for f in ini panels.ini
+do
+    setup/helpers/ini2sed < setup/share/mc/$f > $mc_dir/$f.sed
+
+    if [ -f $mc_dir/$f ]
+    then
+        sed -f "$mc_dir/$f.sed" -i "$mc_dir/$f"
+    else
+        f_in="setup/share/mc/$f"
+        cp -a "$f_in" $mc_dir
+        if [ "$f" = panels.ini ]
+        then
+            sed -e "s/New Left/New Right/" "$f_in" >> $mc_dir/$f
+        fi
+    fi
+done
+EOF
+
 read -r -d '' remote_code <<EOF
 mkdir -p .ssh
 cd .ssh
 tar xmz
+
 if [ -n "$pub_key" ]
 then
     cat $pub_key  >> authorized_keys
     chmod g=,o= . authorized_keys $pub_key
 fi
 
-if [ -d ~/.config ]
-then
-    mc_dir=\$HOME/.config/mc
-else
-    mc_dir=\$HOME/.mc
-fi
+$setup_mc
 
-[ -d \$mc_dir ] || mkdir -p \$mc_dir
-
-for f in ini panels.ini
-do
-    setup/helpers/ini2sed < setup/share/mc/\$f > \$mc_dir/\$f.sed
-
-    if [ -f \$mc_dir/\$f ]
-    then
-        sed -f "\$mc_dir/\$f.sed" -i "\$mc_dir/\$f"
-    else
-        f_in="setup/share/mc/\$f"
-        cp -a "\$f_in" \$mc_dir
-        if [ "\$f" = panels.ini ]
-        then
-            sed -e "s/New Left/New Right/" "\$f_in" >> \$mc_dir/\$f
-        fi
-    fi
-done
-
-cp -u setup/share/gdb/.gdbinit "\$HOME"
-if [ "$setup_root" ]
-then
-    sudo bash -s <<EOFF
-        touch ~/gotit
-EOFF
-fi
+cp -u setup/share/home/* "\$HOME"
 EOF
 
-# tar:
-# ~/.gdbinit
 tar cz $pub_key setup/helpers setup/share setup/bin | ssh -o StrictHostKeyChecking=no "$host" "$remote_code"
+
+if [ "$setup_root" ]
+then
+    read -r -d '' remote_code <<EOF
+sudo -H bash -s <<'EOFF'
+    cd .ssh
+    sudoers="setup/share/etc/sudoers"
+    [ -f \$sudoers ] && cat \$sudoers > /etc/sudoers
+    $setup_mc
+
+    aptitude_dir=\$HOME/.aptitude
+    mkdir -p \$aptitude_dir
+    cp -u -t \$aptitude_dir setup/share/aptitude/*
+EOFF
+EOF
+    ssh -t -o StrictHostKeyChecking=no "$host" "$remote_code"
+fi
