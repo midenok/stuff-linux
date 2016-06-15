@@ -31,6 +31,7 @@ sub new
         command => 'tablo',
         currencies => [ $usd ], # by default only USD games will be shown
         players => 0, # filter by players on table. 0 means any table size.
+        buyin => 0, # filter by buyin. 0 means any buyin
         total_currency => $usd,
         parse_fatal => 1
     } => $class;
@@ -96,9 +97,11 @@ sub get_options
         weeks=i
         last|days=i
         players|p=i
+        buyin|b=f
         command|cmd=s
         tablo
         list
+        summary|all|a
         tournament_id|tournament-id=i
         currency|c=s
         parse_fatal|parse-fatal|fatal:i
@@ -138,7 +141,7 @@ sub process_options
         }
     }
 
-    for my $arg (qw[tablo list]) {
+    for my $arg (qw[tablo list summary]) {
         if ($c->{$arg}) {
             $c->{command} = $arg;
         }
@@ -802,6 +805,8 @@ sub parse_range
     } elsif ($self->{parsed_days} == 0) {
         print STDERR "Warning: no matching tournaments found!\n";
     }
+
+    $self->{conf}->dump($self->{data});
     return $self;
 }
 
@@ -854,6 +859,23 @@ sub parse_day
         return 1;
     }
     return 0;
+}
+
+sub parse_all
+{
+    my $self = shift;
+
+    map {
+        $self->{found_files}++;
+        $_->{full_file} = $self->{dir}. "/". $_->{file};
+        $_->{mtime} = (stat $_->{full_file})[9];
+        $self->parse_file($_);
+    } grep {
+        $_->{file} =~ m/^TS.+\.txt$/
+    } @{$self->read_dir};
+
+    $self->{conf}->dump($self->{data});
+    return $self;
 }
 
 sub try (&$) {
@@ -942,11 +964,18 @@ sub parse_file
             $t->{rake} = 0;
             $t->{buyin} = 0;
         } else {
-        match {
-            $t->{buyin_currency} = Currency->new($1, $6);
-            $t->{rake} = $4;
-            $t->{buyin} = $2 + $t->{rake};
-        } qr"^Buy-In: ${money_re}/${money_full_re}$" => $l[1];
+            match {
+                $t->{buyin_currency} = Currency->new($1, $6);
+                $t->{rake} = $4;
+                $t->{buyin} = $2 + $t->{rake};
+            } qr"^Buy-In: ${money_re}/${money_full_re}$" => $l[1];
+        }
+        
+        if ($c->{buyin} > 0 && $t->{buyin} != $c->{buyin}) {
+            if ($c->{verbose}) {
+                print STDERR "(${file}) ". $t->{buyin_currency}. $t->{buyin}. " buyin tournament skipped!\n";
+            }
+            return;
         }
 
         match {
@@ -1087,6 +1116,15 @@ sub tablo
     }
 }
 
+sub summary
+{
+    my $self = shift;
+    my @tourns = values %{$self->{data}->{byid}};
+    my $sum = PokerStars::TournStats->new();
+    $sum += \@tourns;
+    $self->{total_sum} += $sum;
+}
+
 sub dump
 {
     my $self = shift;
@@ -1104,13 +1142,12 @@ my $dir = $ARGV[0] || $c->{dir} || '.';
 $c->{dir} = $dir;
 our $p = PokerStars::TournSummary->new($c);
 
-$p->parse_range($c->{from_date}, $c->{till_date});
-$c->dump($p->{data});
-
 &{\&{$c->{command}}};
 
 sub tablo
 {
+    $p->parse_range($c->{from_date}, $c->{till_date});
+
     my $tablos = 0;
 
     for (my $d = $c->{from_date}; $d <= $c->{till_date}; ++$d) {
@@ -1135,6 +1172,8 @@ sub tablo
 
 sub list
 {
+    $p->parse_range($c->{from_date}, $c->{till_date});
+
     for (my $d = $c->{from_date}; $d <= $c->{till_date}; ++$d) {
         if (@{$p->byday($d)} == 0) {
             next;
@@ -1142,6 +1181,17 @@ sub list
 
         $p->list_day($d);
     }
+}
+
+sub summary
+{
+    $p->parse_all();
+    $p->summary();
+    my $sum = $p->{total_sum};
+    print "Total for ". $sum->{tourns_n}. " games: ",
+        $sum->score_detail(), ' ',
+        $sum->profit_detail(), "; play time: ", $sum->play_time(), "\n";
+    print "Processed ". $p->{found_files}. " files.\n";
 }
 
 1;
