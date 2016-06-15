@@ -1,0 +1,18 @@
+#!/usr/bin/perl
+use strict;
+
+my $total = 0;
+my %stats;
+
+while (<STDIN>)
+{
+    ++$total;
+    chomp;
+    ++$stats{$_};
+}
+
+my $unique = keys(%stats);
+use integer;
+my $percentage = ($total - $unique) * 100 / $total;
+print "Total: ${total}\n";
+print "Unique: ${unique} (${percentage}%)\n";

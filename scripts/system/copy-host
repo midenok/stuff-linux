@@ -1,0 +1,10 @@
+#!/bin/sh
+sudo rsync -rlptgoP \
+  --delete --delete-excluded \
+  --exclude '/var/cache/*' \
+  --exclude '/var/log/*' \
+  --exclude '/var/tmp/*' \
+  --exclude '/var/lib/mysql/*' \
+  --exclude '/var/spool/*' \
+  --exclude '/var/run/*' \
+  /etc /lib /lib64 /bin /sbin /usr /opt /var .
