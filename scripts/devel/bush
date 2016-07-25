@@ -1,0 +1,2238 @@
+#!/bin/bash
+
+# TODO:
+# start snmpd (look at 3419/snmp), rewrite snmp_agentx_socket in devel-env.xml
+# snmpget should start without any additional options
+# snmpwalk -v2c -c public -m $datacapture_dir/CMS/plugin/data/ProxySense-MIB.txt localhost:3161 fingerprintServerMIBObjects
+# set LD_LIBRARY_PATH after chroot
+# make different user for schroot, so config files would not overlap
+
+set -o pipefail
+shopt -s expand_aliases
+
+################## Utility functions 1 ##################
+
+process_commands()
+{
+    $1 new "\t\tCreate/checkout branch, then build"
+    $1 create_branch "\tCreate branch with svnbranch.sh for dc|kwm"
+    $1 checkout "\tCheckout product from SVN"
+    $1 tags "\t\tCreate tags for product"
+    $1 build_tags "\t\tCreate build tags for product"
+    $1 default_config "\tCreate build config for product"
+    $1 configure "\tRun osbe, configure on product"
+    $1 build "\t\tBuild product"
+    $1 rebuild "\tRebuild from scratch product"
+    $1 install "\tInstall product or just run /usr/bin/install or whatever"
+    $1 genconf "\tCreate etc config"
+    $1 merge "\tMerge product to trunk"
+    $1 update "\tUpdate product from trunk"
+    $1 project "\tInstantiate project file (such as .kdevelop)"
+    $1 shell "\t\tRun subshell"
+    $1 review "\t\tCheckout branch for review"
+    $1 oixmgr "\t\tInvoke oixmgr on installed cluster"
+    $1 adserver "\t\tInvoke oixmgr on installed adserver"
+    $1 stest "\t\tInvoke stest command"
+    $1 stest_kwm "\tInvoke stest on KWM"
+    $1 stest_poo "\tInvoke stest on POO"
+    $1 fpstest "\tInvoke stest on Fingerprinting"
+    $1 kwm_test "\tKWMAutoTest"
+    $1 remove "\t\tRemove whole task. Use with caution!"
+    $1 create_ssh_key "\tCreate SSH keypair and install key on svn.ocslab.com"
+    $1 linked "\tSet linked install 'on' and 'off'"
+    $1 verbose "\tSet verbose mode"
+    $1 show "\t\tShow variable"
+    $1 cdt "\t\tchdir to task dir (run 'show CDPATH' for more)"
+    $1 fatmost "\t\tShow most RSS-fat process"
+    $1 log_fatmost "\t\tRun 'fatmost' every 5 minutes"
+    $1 watch_fatmost "\t Watch 'fatmost' every second"
+    $1 fatmost_pid "\t Print 'fatmost' pid"
+    $1 rmlogs "\tDelete all files from log directory"
+    $1 rmbase "\t\tDelete MySQL base"
+    $1 envir "\t\tLoad environment from environment.sh"
+    $1 jail "\t\tEnter chrooted environment"
+    $1 list "\t\tList tasks"
+    $1 save "\t\tSave settings"
+    $1 load "\t\tLoad settings"
+    $1 pack "\t\tPack task dir"
+    $1 help "\t\tThis help"
+}
+
+configuration()
+{
+    unset shell_wrapper
+    unset instantiate_stubs
+    unset alternative_install
+    uservar alternative_install
+    unset clear_before_start
+
+    default_value option_verbose "n"
+    default_value option_remote "n"
+    uservar option_branch
+    default_value option_force_configure "n"
+    default_value option_linked "n"
+    default_value option_tab_names "n"
+    default_value option_autoswitch_product "y"
+    default_value option_rebuild_on_failed_build "y"
+    default_value option_unixcommons_own "n"
+
+    default_value ssh_key "${HOME}/.ssh/id_dsa"
+    [ -f ~/.bushrc ] && source ~/.bushrc;
+    default_value data_dir $HOME/share/build_shell
+    default_value project_dir "${HOME}/projects"
+    default_value oix_dir "${project_dir}/oix"
+    default_value lib_dir "${project_dir}/unixcommons"
+    default_value review_dir "${oix_dir}"
+    default_value nightly_dir "${oix_dir}/nightly"
+    default_value build_suffix "/build"
+
+    default_value trunk_dirname "trunk"
+    default_value stable_dirname "stable"
+
+    default_value adserver_dirname "adserver"
+    default_value adserver_trunk_dirname $trunk_dirname
+    default_value adserver_stable_dirname $stable_dirname
+
+    default_value datacapture_dirname "datacapture"
+    default_value datacapture_trunk_dirname $trunk_dirname
+
+    default_value unixcommons_dirname "unixcommons"
+    default_value unixcommons_trunk_dirname $unixcommons_dirname
+    default_value unixcommons_stable_dirname "${unixcommons_dirname}.${stable_dirname}"
+
+    default_value keywordmining_dirname "keywordmining"
+    default_value keywordmining_trunk_dirname $keywordmining_dirname
+
+    default_value opt_dirname "opt"
+    default_value shell_wrapper "bash -c"
+    uservar base_port
+    default_value effective_user $(id -un)
+    default_value effective_group "users"
+    default_value ctags_args "-R -N -I AP_DECLARE,AP_DECLARE_NONSTD,APR_DECLARE,APR_DECLARE_NONSTD,APU_DECLARE,APU_DECLARE_NONSTD,AP_CORE_DECLARE_NONSTD --languages=c,c++ --c++-kinds=+px --c-kinds=+px --exclude=Makefile --exclude=."
+    default_value adserver_svnprefix "ADSC-"
+    default_value datacapture_svnprefix "PXS-"
+    default_value svnutils $(dirname "`which svnbranch.sh 2>/dev/null`")
+    require_variable svnutils "(or make svnbranch.sh be on PATH)"
+    default_value svnroot "svn+ssh://svn.ocslab.com/home/svnroot"
+    default_value snmp_agent "false"
+    default_value oixmgr_bin "/opt/oix/manager/bin/oixmgr"
+    default_value pstest_threads 100
+    default_value pstest_run_time 604800
+    default_value pstest_http_version "1.1"
+    default_value pstest_useragent "Mozilla.Firefox/1.0/$USER/%RND%"
+    default_value build_cmd "make"
+    default_value default_remote "dev"
+    default_value default_product "adserver"
+    get_product
+    uservar default_product_short $product_short
+    uservar build_options
+
+    setup_linked
+}
+
+configuration_svn()
+{
+    uservar adserver_svnhome "oix/server"
+    uservar adserver_trunk_svnpath "${adserver_svnhome}/trunk"
+    uservar adserver_stable_svnpath "${adserver_svnhome}/tags/3.3.0.9"
+
+    uservar datacapture_svnhome "oix/datacapture"
+    uservar datacapture_trunk_svnpath "${datacapture_svnhome}/trunk"
+
+    uservar unixcommons_svnhome "unixcommons"
+    uservar unixcommons_trunk_svnpath "${unixcommons_svnhome}/trunk"
+    uservar unixcommons_svnpath $unixcommons_trunk_svnpath
+    uservar unixcommons_stable_svnpath "${unixcommons_svnhome}/tags/3.3.0.9"
+
+    uservar keywordmining_svnhome "oix/keywordmining"
+    uservar keywordmining_trunk_svnpath "${keywordmining_svnhome}/trunk"
+
+    uservar adblock_svnhome "oix/adblock"
+    uservar adblock_trunk_svnpath "${adblock_svnhome}/trunk"
+
+    if [ "$option_branch" -a "$option_branch" != "dev" -a "$option_branch" != "trunk" ]
+    then
+        suffix="${option_branch//./_}"
+        uservar adserver_${suffix}_svnpath "${adserver_svnhome}/branches/${option_branch}"
+        uservar unixcommons_${suffix}_svnpath "${unixcommons_svnhome}/branches/${option_branch}"
+    fi
+}
+
+configuration_post()
+{
+    [ -f "${task_dir}/.bushvars" ] && source "${task_dir}/.bushvars"
+    [ -f "${task_dir}/.bushrc" ] && source "${task_dir}/.bushrc"
+}
+
+variables()
+{
+    # TODO: remove all variable names from here
+    (cat | xargs -n 1 echo | sort) <<-EOR
+        instantiate_stubs \
+        clear_before_start \
+        ${uservars}
+EOR
+}
+export -f variables
+
+no_location_set=1
+location()
+{
+    unset no_location_set
+    local product_home=${1}
+    local lib_home=${2:-${lib_dir}}
+
+    default_value task_dir "${1}/${task_name}"
+
+    if [ -n "$task_num" ]
+    then
+        default_value adserver_dir "${task_dir}/${adserver_dirname}"
+        default_value adserver_build_dir "${adserver_dir}${build_suffix}"
+        default_value adserver_tags "${adserver_dir}.tags"
+    fi
+
+    default_value adserver_trunk_dir "${product_home}/${adserver_trunk_dirname}"
+    default_value adserver_trunk_build_dir "${adserver_trunk_dir}${build_suffix}"
+    default_value adserver_trunk_tags "${adserver_trunk_dir}.tags"
+    default_value adserver_stable_dir "${product_home}/${adserver_stable_dirname}"
+    default_value adserver_stable_build_dir "${adserver_stable_dir}${build_suffix}"
+    default_value adserver_stable_tags "${adserver_stable_dir}.tags"
+
+    if [ -n "$task_num" ]
+    then
+        default_value datacapture_dir "${task_dir}/${datacapture_dirname}"
+        default_value datacapture_build_dir "${datacapture_dir}${build_suffix}"
+        default_value datacapture_tags "${datacapture_dir}.tags"
+    fi
+
+    default_value datacapture_trunk_dir "${task_dir}/${datacapture_trunk_dirname}"
+    default_value datacapture_trunk_build_dir "${datacapture_trunk_dir}${build_suffix}"
+    default_value datacapture_trunk_tags "${datacapture_trunk_dir}.tags"
+
+    # unixcommons and kwm always use trunk by default"
+    default_value unixcommons_trunk_dir "${lib_home}/${unixcommons_trunk_dirname}"
+    default_value unixcommons_trunk_tags "${unixcommons_trunk_dir}.tags"
+    default_value unixcommons_trunk_build_dir "${unixcommons_trunk_dir}${build_suffix}"
+    default_value unixcommons_stable_dir "${lib_home}/${unixcommons_stable_dirname}"
+    default_value unixcommons_stable_build_dir "${unixcommons_stable_dir}${build_suffix}"
+    default_value unixcommons_stable_tags "${unixcommons_stable_dir}.tags"
+
+    default_value unixcommons_dir "${unixcommons_trunk_dir}"
+    default_value unixcommons_tags "${unixcommons_trunk_tags}"
+    default_value unixcommons_build_dir "${unixcommons_trunk_build_dir}"
+
+    default_value keywordmining_trunk_dir "${task_dir}/${keywordmining_trunk_dirname}"
+    default_value keywordmining_trunk_build_dir "${keywordmining_trunk_dir}${build_suffix}"
+    default_value keywordmining_trunk_tags "${keywordmining_trunk_dir}.tags"
+    default_value keywordmining_dir "${keywordmining_trunk_dir}"
+    default_value keywordmining_build_dir "${keywordmining_trunk_build_dir}"
+    default_value keywordmining_tags "${keywordmining_trunk_tags}"
+
+    default_value opt_dir_task "${task_dir}/${opt_dirname}"
+    default_value opt_dir_trunk "${product_home}/${opt_dirname}.trunk"
+    default_value opt_dir_stable "${product_home}/${opt_dirname}.stable"
+
+    if [ "$option_branch" -a "$option_branch" != "dev" -a "$option_branch" != "trunk" ]
+    then
+        suffix="${option_branch//./_}"
+        default_value adserver_${suffix}_dirname "branch_${suffix}"
+        default_value adserver_${suffix}_dir "${product_home}/branch_${suffix}"
+        default_value adserver_${suffix}_build_dir "${product_home}/branch_${suffix}${build_suffix}"
+        default_value adserver_${suffix}_tags "${product_home}/branch_${suffix}.tags"
+        default_value opt_dir_${suffix} "${product_home}/${opt_dirname}.${suffix}"
+        default_value unixcommons_${suffix}_dirname "branch_${suffix}"
+        default_value unixcommons_${suffix}_dir "${project_dir}/unixcommons/branch_${suffix}"
+        default_value unixcommons_${suffix}_build_dir "${lib_home}/unixcommons/branch_${suffix}${build_suffix}"
+        default_value unixcommons_${suffix}_tags "${lib_home}/unixcommons/branch_${suffix}.tags"
+    fi
+}
+export -f location
+
+# die will be deprecated in favor of die2 when all funcs will be covered with {( )}
+die()
+{
+    [ -n "$1" ] && echo "$1" >&2;
+    if [ "x$bush_subshell" = "x1" ]
+    then
+        while true; do kill -SIGINT -$$; sleep 700d; done
+    else
+        exit 1
+    fi
+}
+export -f die
+
+die2()
+{
+    if [ -n "$1" ]
+    then
+        echo "$1" >&2
+    else
+        echo "" >&2
+    fi
+    exit 1
+}
+export -f die2
+
+croak()
+{
+    for f in "${FUNCNAME[@]}"
+    do
+        echo "$f()" >&2
+    done
+    die2 "$@"
+}
+export -f croak
+
+get_variable()
+{
+    local flags=$-; set +vx
+    val=$(eval echo \$$1)
+    [ -z "$val" ] && croak "$1 must be defined!${2:+ $2}"
+    echo "$val"
+    set -$flags
+}
+export -f get_variable
+
+set_variable()
+{
+    eval $1="$2"
+}
+export -f set_variable
+
+require_variable()
+{
+    get_variable $1 > /dev/null
+}
+export -f require_variable
+
+create_dir()
+{
+    [ -d "$1" ] ||
+        mkdir "$1"||
+        die
+}
+export -f create_dir
+
+show_progress()
+{
+    t=$1
+    case "$option_verbose" in
+    y*) cat;;
+    *)
+        while read
+        do
+            echo -n ${t}.
+            unset t
+        done
+        [ -z "$t" ] && echo done!
+        ;;
+    esac
+}
+export -f show_progress
+
+time2str()
+{
+    local s=$(($1 % 60))
+    local m=$(($1 / 60))
+    local h=$((m / 60))
+    m=$((m % 60))
+    local d=$((h / 24))
+    h=$((h % 24))
+    local str
+    [ $s -gt 0 ] &&
+        str="${s}s"
+    [ $m -gt 0 ] &&
+        str="${m}m ${str}"
+    [ $h -gt 0 ] &&
+        str="${h}h ${str}"
+    [ $d -gt 0 ] &&
+        str="${d}d ${str}"
+    [ -z "$str" ] &&
+        str="0s"
+    echo "$str"
+}
+export -f time2str
+
+measure_enter()
+{
+    local flags=$-; set +vx
+    eval entered_${1}_${2}=$(date +%s)
+    set -$flags
+}
+export -f measure_enter
+
+measure_start()
+{
+    local flags=$-; set +vx
+    eval started_${1}_${2}=$(date +%s)
+    set -$flags
+}
+export -f measure_start
+
+measure_finish()
+{
+    local flags=$-; set +vx
+    local finished=$(date +%s)
+    eval elapsed_${1}_${2}="\$((finished - started_${1}_${2}))"
+    eval elapsed_total_${1}_${2}="\$((finished - entered_${1}_${2}))"
+    eval local elapsed=\$elapsed_${1}_${2}
+    eval local elapsed_total=\$elapsed_total_${1}_${2}
+    [ $elapsed = $finished ] &&
+        elapsed=$elapsed_total
+    local total=""
+    [ $elapsed != $elapsed_total ] &&
+        total=" (total $(time2str ${elapsed_total}))"
+    echo "Finished ${1} ${2} in $(time2str ${elapsed})${total}"
+    set -$flags
+}
+export -f measure_finish
+
+get_product_vars()
+{
+    src_dir=$(get_variable "${product}_dir")
+    build_dir=$(get_variable "${product}_build_dir")
+    dir_name=$(get_variable "${product}_dirname")
+
+    product_dirname=$(get_variable "${product}_dirname")
+    product_dir=$(get_variable "${product}_dir")
+    product_build_dir=$(get_variable "${product}_build_dir")
+    product_tags=$(get_variable "${product}_tags")
+
+    uc_dir=$(get_variable "unixcommons${suffix:+_${suffix}}_dir")
+    uc_build_dir=$(get_variable "unixcommons${suffix:+_${suffix}}_build_dir")
+
+    local s=${suffix:-task}
+    default opt_dir $(get_variable "opt_dir_${s}")
+    var_dir=${opt_dir}/var
+    log_dir=${var_dir}/log
+    etc_dir=${opt_dir}/etc
+
+    export PATH=${task_dir}/bin:${opt_dir}/etc:${opt_dir}/bin${PATH_ORIG:+:$PATH_ORIG}
+    export LD_LIBRARY_PATH=${opt_dir}/lib${LD_LIBRARY_PATH_ORIG:+:$LD_LIBRARY_PATH_ORIG}
+    # required by schroot-ed shell:
+    export LD_LIBRARY_PATH_PRESERVED=$LD_LIBRARY_PATH
+
+    case $product in
+    datacapture*)
+        PATH=${opt_dir}/etc/localhost:$PATH
+        export loglevel_control="$opt_dir/var/run/loglevel.control"
+        sms_xml="${opt_dir}/etc/devel/sms.xml"
+        ;;
+    esac
+
+    # FIXME: fix this rubbish
+    unset product_svnhome product_svntask product_svnpath
+    if [ -z "$task_num" ]
+    then
+        product_svnpath=$(get_variable "${product}_svnpath")
+    fi
+
+    case $product in
+    unixcommons*|*_trunk|*_stable)
+        product_svnpath=$(get_variable "${product}_svnpath")
+        return;;
+    esac
+
+    if [ $task_num ]
+    then
+        svnprefix=$(get_variable "${product}_svnprefix")
+        product_svnhome=$(get_variable "${product}_svnhome")
+        product_svntask="${svnprefix}${task_num}"
+        product_svnpath="${product_svnhome}/branches/dev/${product_svntask}"
+    fi
+}
+export -f get_product_vars
+
+get_product()
+{
+    local arg=${1:-${default_product}}
+    unset suffix
+    if [ "$option_branch" -a "$option_branch" != "dev" ]
+    then
+        suffix="${option_branch//./_}"
+    fi
+
+    case "$arg"
+    in
+        *_trunk) suffix=trunk;;
+        *_stable) suffix=stable;;
+    esac
+
+    local suffix2=${suffix:+_${suffix}}
+    local arg2=${arg%${suffix2}}
+    case "$arg2"
+    in
+        adserver|ad|as|a)
+            product=adserver${suffix2}
+            product_short=a;;
+        unixcommons|uc|u)
+            product=unixcommons${suffix2}
+            product_short=u;;
+        datacapture|dc|d)
+            product=datacapture${suffix2}
+            product_short=d;;
+        keywordmining|kwm|kw|k)
+            product=keywordmining${suffix2}
+            product_short=k;;
+        adblock|ab|b)
+            product=adblock${suffix2}
+            product_short=b;;
+        *) 
+            if [ "${FUNCNAME[1]}" = install ]
+            then
+                return 1
+            else
+                die2 "Wrong product: ${arg2}
+Must specify one of: unixcommons (u), adserver (a), datacapture (d), keywordmining (k) or adblock (ab)"
+            fi
+            ;;
+    esac
+
+    if [ "$option_autoswitch_product" = "y" ]
+    then
+        export_parent << EOF
+            default_product=$product
+            default_product_short=$product_short
+EOF
+    fi
+    true
+}
+export -f get_product
+
+# depracted in favor of get_product_vars()
+product_name_deprecated()
+{
+    get_product "$@" 2>/dev/null
+    echo $product
+}
+export -f product_name_deprecated
+
+
+ide_name()
+{
+    case "$1"
+    in
+        oxygen|cmsplugin|cms|o) echo oxygen;;
+        kdevelop|kdev|k|"") echo kdevelop;;
+        kdevelop3|kdev3|3) echo kdevelop3;;
+        *) echo "Wrong IDE, must specify one of: oxygen (o), kdevelop (k) or kdevelop3 (3)"
+            return 1;;
+    esac
+}
+export -f ide_name
+
+ide_files()
+{
+    case "$1"
+    in
+        kdevelop) echo \
+            '%p.kdev4.m4' \
+            '.kdev4/%p.kdev4.m4' \
+            '.kdev_include_paths.m4' \
+            '.kdev4/.kdev_include_paths.m4';;
+        kdevelop3) echo '%p.kdevelop.m4';;
+        oxygen) echo '%p.xpr';;
+        *) die "ide_files: wrong argument!"
+            ;;
+    esac
+}
+export -f ide_files
+
+validate_for_branch()
+{
+    if [ -z "$task_num" ]
+    then
+        echo "No task number defined!" >&2
+        return 1
+    fi
+
+    case "$1"
+    in
+        datacapture) ;;
+        keywordmining) ;;
+        adserver) ;;
+        *)
+            echo "Specify adserver, datacapture or keywordmining!" >&2
+            return 1
+    esac
+    return 0
+}
+export -f validate_for_branch
+
+################## CLI commands ##################
+# TODO: move inappropriate functions to other sections
+
+alias product_cmd='
+    if get_options "$@"
+    then
+        eval set -- "${args[@]}"
+        if get_product "$@"
+        then
+            get_product_vars
+            shift
+            measure_enter ${FUNCNAME[0]} $product
+            set -e
+        else
+            false
+        fi
+    else
+        false
+    fi'
+
+create_branch()
+{(
+    product_cmd
+    validate_for_branch $product ||
+        die2
+
+    export PROJECT_ROOT="${svnroot}/${product_svnhome}"
+
+    create_dir "$task_dir"
+    builtin cd "$task_dir"
+
+    "${svnutils}/svnbranch.sh" "${product_svntask}" |
+        show_progress "Creating branch for ${product}" &&
+    mv "${product_svntask}" "${dir_name}" &&
+    tags $product
+)}
+
+checkout()
+{(
+    product_cmd
+
+    svn co "$@" "${svnroot}/${product_svnpath}" "${src_dir}" |
+        show_progress "Checking out ${product}" &&
+    tags $product
+)}
+
+new()
+{(
+    product_cmd
+    validate_for_branch $product ||
+        die2
+
+    checkout $product 2> /dev/null ||
+        create_branch $product
+
+    [ -n "$project_suffix" ] &&
+        project $product
+
+
+    install $product
+    genconf $product
+    measure_finish new $product
+)}
+
+tags()
+{(
+    p=$(product_name_deprecated $1) || die2 "$p"
+    shift
+
+    local tags_file=$(get_variable "${p}_tags")
+    local src_dir=$(get_variable "${p}_dir")
+
+    ctags $ctags_args -f "${tags_file}" "${src_dir}" &&
+        echo "Created ${tags_file}"
+)}
+
+build_tags()
+{(
+    p=$(product_name_deprecated $1) || die2 "$p"
+    shift
+
+    local build_dir=$(get_variable "${p}_build_dir")
+    local tags_file="${build_dir}/tags"
+
+    ctags $ctags_args -f "${tags_file}" "${build_dir}" 2> /dev/null &&
+        echo "Created ${tags_file}"
+)}
+
+project()
+{(
+    product_cmd
+
+    ide=$(ide_name $1)
+    shift || true
+
+    project_files="$(ide_files $ide)"
+    project_name="${task_name}_${product}"
+
+    gdb_command=$shell_wrapper
+    gdb_command=${gdb_command%%bash -c}
+    gdb_command=${gdb_command%%-- }
+
+    local km_html_in km_html_out
+
+    case $product in
+    keywordmining*)
+        run_exec="${opt_dir}/bin/HTMLParserTest"
+        run_args='--mode="kwm-mining" --source-file=km.html --text-maximum="4096 bytes" --print-descriptions --test-numbers=1 --xml-config="KMParsingSettingsSchemaKWMTool.xml" --output-separator="----------===CTR5C789MXFKSXQDHHWRMXIUWXMGHSXSV===----------" --user-agent="Mozilla/5.0 (X11; U; Linux i686; en-US) AppleWebKit/534.7 (KHTML, like Gecko) Chrome/7.0.517.44 Safari/534.7"'
+        km_html_in="${data_dir}/km.html"
+        km_html_out="${task_dir}/km.html"
+        gdb_command="${gdb_command} gdb"
+        alt_tags=$datacapture_tags
+        ;;
+    datacapture*)
+        run_exec="${opt_dir}/bin/SnifferSense"
+        run_args="-f ${opt_dir}/etc/localhost/ProxySenseConfig.xml -s profiler-128"
+        gdb_command="${gdb_command} sudo gdb"
+        alt_tags=$keywordmining_tags
+        ;;
+    esac
+
+    if [ "${option_remote}" = y ]
+    then
+        build_cmd="${remotes[$option_remote]}"
+        [ -z "$build_cmd" ] &&
+            die2 "Remote '${option_remote}' is not configured!"
+    fi
+
+    for in_file in $project_files
+    do
+        local out_file0="${task_dir}/${in_file}"
+        local operation=copy
+        local out_file=${out_file0%.m4}
+        [ "${out_file}" != "${out_file0}" ] &&
+            operation=m4
+
+        out_file=${out_file//%p/$product_dirname}
+
+        mkdir -p $(dirname "$out_file")
+
+        local product_build_dirname=$(basename "$product_build_dir")
+        if [ $operation = m4 ]
+        then
+            m4 \
+                -D "__PROJECT_NAME=${project_name}" \
+                -D "__PROJECT_DIR=${product_dir}" \
+                -D "__SRC_DIRNAME=${product_dirname}" \
+                -D "__PROJECT_ABSOLUTE=false" \
+                -D "__BUILD_DIR=${product_build_dir}" \
+                -D "__BUILD_DIRNAME=${product_build_dirname}" \
+                -D "__BUILD_CMD=${build_cmd}" \
+                -D "__LIB_DIR=${opt_dir}/lib" \
+                -D "__CTAGS_ARGS=${ctags_args}" \
+                -D "__BRANCH_TAGS=${product_tags}" \
+                -D "__ALT_TAGS=${alt_tags}" \
+                -D "__UNIXCOMMONS_TAGS=${unixcommons_tags}" \
+                -D "__MAIN_PROGRAM=${run_exec}" \
+                -D "__PROGRAM_ARGS=${run_args}" \
+                -D "__GLOBAL_CWD=${task_dir}" \
+                -D "__DBG_SHELL=${gdb_command}" \
+                "${data_dir}/${in_file}" > "${out_file}"
+        else
+            cp "${data_dir}/${in_file}" "${out_file}"
+        fi &&
+        echo "Created ${out_file}"
+    done
+
+    if [ "${ide}" = kdevelop3 ]
+    then
+        tags $product
+    fi
+
+    if [ -f "${km_html_in}" -a ! -f "${km_html_out}" ]
+    then
+        cp "${km_html_in}" "${km_html_out}" &&
+        echo "Created ${km_html_out}"
+    fi
+)}
+
+default_config()
+{(
+    product_cmd
+
+    [ -f "${src_dir}/default.config.t" ] ||
+        checkout $product ||
+            die2 "Checkout failed!"
+
+    [ -d "${build_dir}" ] ||
+        mkdir -p ${build_dir}
+
+    if [ -d "${keywordmining_dir}" ]
+    then
+        keywordmining_root="${keywordmining_dir}"
+        keywordmining_build="${keywordmining_build_dir}"
+    fi
+
+    if [ -d "${adblock_dir}" ]
+    then
+        adblock_root="${adblock_dir}"
+        adblock_build="${adblock_build_dir}"
+    fi
+
+    # Bugs in build system: some variables require relative path,
+    # some absolute path (UNIXCOMMONS_DEF). No uniform way to set variables.
+    cpp \
+        -DDEBUG \
+        -DMORAN_NONE \
+        -DNOJAVA \
+        -DUNIXCOMMONS_ROOT="${uc_dir}" \
+        -DUNIXCOMMONS_BUILD="build" \
+        -DUNIXCOMMONS_DEF="${uc_build_dir}/libdefs" \
+        -DUNIXCOMMONS_INCLUDE="src build/src" \
+        -DUNIXCOMMONS_CORBA_INCLUDE="src/CORBA build/src/CORBA" \
+        -DUNIXCOMMONS_LIB="build/lib" \
+        -DUSE_OCCI \
+        -DKEYWORDMINING_ROOT="${keywordmining_root}" \
+        -DKEYWORDMINING_BUILD="${keywordmining_build}" \
+        -DADBLOCK_ROOT="${adblock_root}" \
+        -DADBLOCK_BUILD="${adblock_build}" \
+        ${src_dir}/default.config.t ${build_dir}/default.config
+
+     echo "Created ${build_dir}/default.config"
+)}
+
+configure()
+{(
+    product_cmd
+
+    [ -f "${build_dir}/default.config" -a "${src_dir}/default.config.t" -ot "${build_dir}/default.config" ] ||
+        default_config $product
+
+    $shell_wrapper "
+    cd ${src_dir} &&
+    osbe &&
+    cd ${build_dir} &&
+    ${src_dir}/configure --enable-no-questions --enable-guess-location=no --prefix=${opt_dir} $*" |
+        show_progress "Configuring $product"
+)}
+
+# you must call get_options within inside ( )!
+get_options()
+{
+    local optstring_long="trunk,configure,no-linked,r::,remote:,colo-xml:,cx:,port-offset:,po:,devel-xml:,dx:,single-thread,threads:,debug,verbose,help"
+    local optstring_short="tcLrsT:dvh"
+
+    [ $optstring_long_ext ] &&
+        optstring_long="${optstring_long},${optstring_long_ext}"
+    [ $optstring_short_ext ] &&
+         optstring_short="${optstring_short}${optstring_short_ext}"
+
+    local func=${FUNCNAME[1]}
+    local opts
+    local quiet
+
+    [ "${FUNCNAME[1]}" = install ] &&
+        quiet=-q
+
+    opts=$(getopt $quiet -o "${optstring_short}" --long "${optstring_long}" --name $func -- "$@")
+    if [ $? -ne 0 ]
+    then
+        if [ "${FUNCNAME[1]}" = install ]
+        then
+            return 1
+        else
+            die2
+        fi
+    fi
+
+    eval set -- "$opts"
+    unset option_colo_xml
+    unset option_port_offset
+    unset option_devel_xml
+
+    while true
+    do
+        case "$1" in
+            -t|--trunk)
+                option_branch=trunk
+                shift;;
+            -c|--configure)
+                option_force_configure=y
+                shift;;
+            -L|--no-linked)
+                unset option_linked
+                setup_linked
+                shift;;
+            -r)
+                option_remote=$default_remote
+                shift;;
+            --r|--remote)
+                option_remote=${2:-${default_remote}}
+                shift 2;;
+            --colo-xml|--cx)
+                option_colo_xml=$2
+                shift 2;;
+            --devel-xml|--dx)
+                option_devel_xml=$2
+                shift 2;;
+            --port-offset|--po)
+                option_port_offset=$2
+                shift 2;;
+            -s|--single-thread)
+                option_threads=1
+                shift;;
+            -T|--threads)
+                option_threads=$2
+                shift 2;;
+            -d|--debug)
+                set -x
+                shift;;
+            -v|--verbose)
+                option_verbose=y
+                shift;;
+            -h|--help)
+                cat <<EOF
+Usage: $func [OPTIONS] [PARAMS]
+Options:
+-c, --configure             Force configuration phace
+-L, --no-linked             Force copy instead of symlink in installation phase
+-r, --r, --remote REMOTE    Set REMOTE (or default) for project build commands
+-t, --trunk                 Work on trunk instead of dev branch
+-d, --debug                 Trace commands with set -x
+-v, --verbose               Run configuration, compilation and installation verbosely
+EOF
+                exit
+                shift;;
+            --) shift; break;;
+            *)
+                $get_options_ext "$@"
+                eval set -- "${args[@]}"
+                ;;
+        esac
+    done
+
+    unset optstring_long_ext
+    unset optstring_short_ext
+    unset get_options_ext
+    args=("$@")
+}
+export -f get_options
+
+get_options_genconf()
+{
+    optstring_long_ext="flavour:,flavor:"
+    optstring_short_ext="f:"
+    get_options_ext="get_options_genconf_ext"
+    unset genconf_flavour
+}
+export -f get_options_genconf
+
+get_options_genconf_ext()
+{
+    case "$1" in
+    -f|--flavour|--flavor)
+        case "$2" in
+            main) ;;
+            test) genconf_flavour=adserver_genconf_flavour_test;;
+            snmp) genconf_flavour=adserver_genconf_flavour_snmp;;
+            ads_1) genconf_flavour=adserver_genconf_flavour_ads_1;;
+            emergency) genconf_flavour=adserver_genconf_flavour_emergency;;
+            *)
+                die2 "Unknown config flavour: ${2}!"
+                ;;
+        esac
+        shift 2;;
+    esac
+    args=("$@")
+}
+export -f get_options_genconf_ext
+
+
+build()
+{(
+    product_cmd
+
+    # build dependencies
+    case "$product" in
+    unixcommons*) ;;
+    *)
+        [ -f "${opt_dir}/lib/libCORBACommons.so" ] ||
+            install unixcommons${suffix:+_${suffix}} "prefix=${opt_dir}" -- "$@"
+        ;;
+    esac
+
+    case "$product" in
+    datacapture*)
+        [ -f "${opt_dir}/lib/libAdBlock.so" ] ||
+            install adblock${suffix:+_${suffix}} "prefix=${opt_dir}" -- "$@"
+
+        [ -f "${opt_dir}/lib/libKWMProcessor.so" ] ||
+            install -t keywordmining${suffix:+_${suffix}} "prefix=${opt_dir}" -- "$@"
+        ;;
+    esac
+
+    [ -f "${build_dir}/Makefile" \
+        -a -f "${build_dir}/current.config" \
+        -a "${src_dir}/default.config.t" -ot "${build_dir}/default.config" \
+        -a "${build_dir}/default.config" -ot "${build_dir}/current.config" ] ||
+        configure $product
+
+    measure_start build $product
+
+    local build_lnk="${src_dir}/build"
+    [ -h "${build_lnk}" ] &&
+        rm "${build_lnk}"
+
+    [ ! -e "${build_lnk}" ] &&
+        ln -s "${build_dir}" "${build_lnk}"
+
+    $shell_wrapper "
+    cd ${build_dir} &&
+    make $build_options $*" |
+        tee "${task_dir}/${dir_name}${build_suffix}.log" |
+        show_progress "Building $product" || {
+            case "$option_rebuild_on_failed_build"
+            in
+            y*|Y*|1)
+                exec rebuild $product "$@";;
+            *)
+                exit $?;;
+            esac
+        }
+    build_tags $product
+
+    measure_finish build $product
+)}
+
+rebuild()
+{(
+    product_cmd
+
+    option_rebuild_on_failed_build="n"
+    rm -rf $product_build_dir
+    echo "Deleted ${product_build_dir}"
+    build $product -- "$@"
+)}
+
+install()
+{(
+    [ "$1" = 'all' ] && {
+        shift
+        measure_enter install all
+        install u "$@" &&
+        install kt "$@" &&
+        install d "$@"
+        measure_finish install all
+        return
+    }
+
+    unset -f install
+
+    product_cmd ||
+        exec $(which install) "$@"
+
+    [ -n "$(find "${build_dir}/lib" -type l -print -quit 2>/dev/null)" ] ||
+        build $product -- "$@"
+
+    measure_start install $product
+
+    arg=${1:-"\"prefix=${opt_dir}\""}
+    shift || true
+
+    $shell_wrapper "
+        cd ${build_dir}
+        make install ${arg} $*" |
+    show_progress "Installing ${product}"
+
+    if [ "${product}" = "keywordmining" ]
+    then
+        kwmtool_config="${task_dir}/KMParsingSettingsSchemaKWMTool.xml"
+        sed -e 's/<segmentation enable="on">/<segmentation enable="off">/' \
+            ${opt_dir}/share/tests/KMParsingSettingsSchemaKWMTool.xml \
+            > "${kwmtool_config}"
+        echo "Created ${kwmtool_config}"
+    fi
+
+    measure_finish install $product
+)}
+
+# datacapture-specific
+instantiate_stub()
+{
+    # FIXME: opt_dir is generated in get_product_vars()
+    m4 \
+        -D "__OPT_DIR=${opt_dir}" \
+        -D "__TASK_DIR=${task_dir}" \
+        -D "__EXEC=$2/$1" \
+        "${data_dir}/stub.m4" > "${opt_dir}/etc/stub/$1"
+}
+export -f instantiate_stub
+
+
+# datacapture-specific
+stubs()
+{
+    # FIXME: opt_dir is generated in get_product_vars()
+    instantiate_stub AdUserAgentServer "${opt_dir}/bin"
+    instantiate_stub ProbeObj "${opt_dir}/bin"
+    instantiate_stub PubOptOutServer "${opt_dir}/bin"
+    instantiate_stub RotateLog "${opt_dir}/bin"
+    instantiate_stub SnifferSense "${opt_dir}/bin"
+    instantiate_stub httpd.worker /usr/sbin
+}
+export -f stubs
+
+genconf()
+{(
+    get_options_genconf
+    product_cmd
+
+    case $product in
+        adserver*) adserver_genconf "$@";;
+        datacapture*) datacapture_genconf "$@";;
+        *) die2 "genconf: only 'adserver' or 'datacapture' is supported!";;
+    esac
+
+    measure_finish genconf $product
+)}
+
+adserver_genconf()
+{
+    # FIXME: bug: wrong unixcommons_root in envdev.sh and unix_commons_root in environment.sh
+    #        for branch (e.g. -b 3.3.0)
+
+    mkdir -p "${etc_dir}"
+    rsync -au ${src_dir}/CMS/tests/Configs/devel/ ${etc_dir}/
+    cd ${etc_dir}
+
+    local threads=10
+    [ -n "$option_threads" ] &&
+        threads=$option_threads
+
+    sed -i -e "
+        s/USER => .*,\s*$/USER => ${effective_user},/;
+        s/USERGROUP => .*,\s*$/USERGROUP => ${effective_group},/;
+        s/HOST => .*,\s*$/HOST => 'localhost',/;
+        s/PORT_BASE => .*,\s*$/PORT_BASE => ${base_port},/;
+    " devvars
+
+    sed -i -e "
+        s|server_root=.*$|server_root=${src_dir}|;
+        s|config_root=.*$|config_root=${etc_dir}|;
+        s|workspace_root=.*$|workspace_root=${var_dir}|;
+        s|unixcommons_root=.*$|unixcommons_root=${unixcommons_dir}|;
+    " envdev.sh
+
+    if [ ! colocation.xml.t -ot colocation.xml ]
+    then
+        # These come from <UnitLocalData UnitName="Global"> of LocalParams.xml:
+        TanxAccount=20076186
+        OpenRtbAccount=20076187
+        OpenRtbColo=20004164
+        sed -ni -re '
+            s|max_clients=.*".*"(.*)$|max_clients="'$threads'"\1|;
+            s|min_spare_threads=.*".*"(.*)$|min_spare_threads="1"\1|;
+            s|max_spare_threads=.*".*"(.*)$|max_spare_threads="'$threads'"\1|;
+            s|threads_per_process=.*".*"(.*)$|threads_per_process="'$threads'"\1|;
+
+            /<statFilesReceiverRef/ {
+                s/host="[^"]*"/host="stat-dev1"/
+                s/port="[^"]*"/port="10878"/
+                p; b
+            }
+            /<biddingModule/ {
+                s/max_bid_time="[^"]*"/max_bid_time="60000"/
+                a\
+              <logging log_level="17" sys_log="false"/>
+                p; n; b bidding_module_process
+            }
+            /<fileTransferring/ {
+                s/logs_backup="[^"]*"/logs_backup="true"/
+                p; b
+            }
+
+            /<RTBAccount/ d
+            /<\/coloParams>/ {
+                i\
+          <RTBAccount account_id="'$TanxAccount'" tanx_encryption_key="b0036ce2a7edb02c06fab9cac2bee333"/> \
+          <RTBAccount account_id="'$OpenRtbAccount'" tanx_encryption_key="5117962f876a70e1478e99fef41e71d6"/>
+                p; b
+            }
+
+            /<IPMapping/ b delete_ipmapping
+
+            /<central>/ {
+                i\
+        <IPMapping> \
+          <colo cohorts="" colo_id="'$OpenRtbColo'" ip_range="5.10.16.0/20"/> \
+          <colo cohorts="" colo_id="'$OpenRtbColo'" ip_range="195.91.155.0/24"/> \
+          <colo cohorts="" colo_id="'$OpenRtbColo'" ip_range="208.94.176.0/24"/> \
+        </IPMapping>
+                p; b
+            }
+
+            p; b
+
+            : delete_ipmapping
+                /<\/IPMapping>/ b
+                n
+                b delete_ipmapping
+
+            : bidding_module_process
+                /<\/biddingModule>/ p; b
+                /<logging/ { n; b bidding_module_process }
+                p; n
+                b bidding_module_process
+        ' colocation.xml.t
+
+        $genconf_flavour
+
+        $shell_wrapper ./adtempl.sh
+    fi
+
+    $shell_wrapper ./confgen.sh|
+        show_progress "Generating config for $product"
+}
+export -f adserver_genconf
+
+adserver_genconf_flavour_test()
+{
+    sed -i -e '
+        /dbConnectionForRead/ {
+            s|db="[^"]*"|db="//oracle/addbtest.ocslab.com"|
+            s/user="[^"]*"/user="adserver_RO"/;
+            s/schema="[^"]*"/schema="ADSERVER"/;
+            s/password="[^"]*"/password="adserver"/;
+        }
+        /dbConnectionForLogProcessing/ {
+            s|db="[^"]*"|db="//oracle/addbtest.ocslab.com"|
+            s/user="[^"]*"/user="adserver_LP"/;
+            s/schema="[^"]*"/schema="ADSERVER"/;
+            s/password="[^"]*"/password="adserver"/;
+        }
+        /dbConnectionForAutoChannel/ {
+            s|db="[^"]*"|db="//oracle/addbtest.ocslab.com"|
+            s/user="[^"]*"/user="adserver_AC"/;
+            s/schema="[^"]*"/schema="ADSERVER"/;
+            s/password="[^"]*"/password="adserver"/;
+        }
+        /pgConnection/ {
+            s/host=[^ "]*/host=stat-test.ocslab.com/;
+            s/dbname=[^ "]*/dbname=stat_test/;
+            s/user=[^ "]*/user=ro/;
+            s/password=[^ "]*/password=adserver/;
+        }
+        /dataSourceRef/ {
+            s/host="[^"]*"/host="voix0"/;
+            s/port="[^"]*"/port="8873"/;
+        }
+    ' colocation.xml.t
+
+}
+export -f adserver_genconf_flavour_test
+
+adserver_genconf_flavour_emergency()
+{
+    sed -i -e '
+        /dbConnectionForRead/ {
+            s|db="[^"]*"|db="//oradem.ocslab.com:1621/addbet.ocslab.com"|
+            s/user="[^"]*"/user="adserver_ro"/;
+            s/schema="[^"]*"/schema="ADSERVER"/;
+            s/password="[^"]*"/password="adserver"/;
+        }
+        /dbConnectionForLogProcessing/ {
+            s|db="[^"]*"|db="//oradem.ocslab.com:1621/addbet.ocslab.com"|
+            s/user="[^"]*"/user="adserver_rw"/;
+            s/schema="[^"]*"/schema="ADSERVER"/;
+            s/password="[^"]*"/password="adserver"/;
+        }
+        /dbConnectionForAutoChannel/ {
+            s|db="[^"]*"|db="//oradem.ocslab.com:1621/addbet.ocslab.com"|
+            s/user="[^"]*"/user="adserver_rw"/;
+            s/schema="[^"]*"/schema="ADSERVER"/;
+            s/password="[^"]*"/password="adserver"/;
+        }
+        /pgConnection/ {
+            s/host=[^ "]*/host=epostgres.ocslab.com/;
+            s/dbname=[^ "]*/dbname=stat/;
+            s/user=[^ "]*/user=oix/;
+            s/password=[^ "]*/password=adserver/;
+        }
+        /dataSourceRef/ {
+            s/host="[^"]*"/host="eoix"/;
+            s/port="[^"]*"/port="8873"/;
+        }
+        /statFilesReceiverRef/ {
+            s/host="[^"]*"/host="epostgres"/;
+            s/port="[^"]*"/port="10873"/;
+        }
+    ' colocation.xml.t
+
+}
+export -f adserver_genconf_flavour_emergency
+
+
+
+
+adserver_genconf_flavour_ads_1()
+{
+    sed -i -e '
+        /dbConnectionForRead/ {
+            s|db="[^"]*"|db="//oraads/addbads.ocslab.com"|
+            s/user="[^"]*"/user="ADS_DEV_RO"/;
+            s/schema="[^"]*"/schema="ads_1"/;
+            s/password="[^"]*"/password="adserver"/;
+        }
+        /dbConnectionForLogProcessing/ {
+            s|db="[^"]*"|db="//oraads/addbads.ocslab.com"|
+            s/user="[^"]*"/user="ADS_DEV_RW"/;
+            s/schema="[^"]*"/schema="ads_1"/;
+            s/password="[^"]*"/password="adserver"/;
+        }
+        /dbConnectionForAutoChannel/ {
+            s|db="[^"]*"|db="//oraads/addbads.ocslab.com"|
+            s/user="[^"]*"/user="ADS_DEV_RW"/;
+            s/schema="[^"]*"/schema="ads_1"/;
+            s/password="[^"]*"/password="adserver"/;
+        }
+        /pgConnection/ {
+            s/dbname=[^ "]*/dbname=ads_1/;
+        }
+        /statFilesReceiverRef/ {
+            s/host="[^"]*"/host="stat-dev1"/;
+            s/port="[^"]*"/port="10874"/;
+        }
+    ' colocation.xml.t
+
+}
+export -f adserver_genconf_flavour_ads_1
+
+adserver_genconf_flavour_snmp()
+{
+    sed -i -e '
+        /<snmpStats/ {
+            s/enable="[^"]*"/enable="true"/;
+        }
+    ' colocation.xml.t
+
+}
+export -f adserver_genconf_flavour_snmp
+
+datacapture_genconf()
+{
+    require_variable base_port
+
+    local base_port2=${base_port}
+    [ -n "$option_port_offset" ] && base_port2=$((base_port + $option_port_offset))
+
+    create_dir "${opt_dir}"
+
+    deploy_sh="${datacapture_dir}/CMS/plugin/exec/deploy.sh"
+
+    if [ "$option_colo_xml" ]
+    then
+        devel_xml="$option_colo_xml"
+        devel_xml_base=$(basename "$devel_xml")
+    else
+        if [ "$option_devel_xml" ]
+        then
+            devel_xml_src="$option_devel_xml"
+        else
+            devel_xml_src="${datacapture_dir}/CMS/configs/devel.xml"
+            [ -f "${devel_xml_src}" ] || {
+                devel_xml_src="${datacapture_trunk_dir}/CMS/configs/devel.xml"
+                deploy_sh="${datacapture_trunk_dir}/CMS/plugin/exec/deploy.sh"
+            }
+        fi
+
+        devel_xml_base=$(basename "${devel_xml_src}")
+        devel_xml="${task_dir}/${devel_xml_base}"
+
+        if [ "$devel_xml" -ot "${devel_xml_src}" ]
+        then
+             sed '#/<cfg:Fingerprint/ {
+#                 c\
+#                 <cfg:Fingerprint\
+#                     enabled="true"\
+#                     client_opt_in="true"\
+#                     update_period="24 hours"\
+#                     update_start="7"\
+#                     min_unseen="1 hour"\
+#                     adreq_limit="7"\
+#                     dead_factor="10"\
+#                     soon_factor="5"\
+#                     opted_out_users="true"\
+#                     ip_based_mode="true"/>\
+#                 <cfg:NBO>\
+#                     <cfg:SubscriberInfo\
+#                                     iLimiter="true"\
+#                                     host_port="dc-server2.ocslab.com:91"\
+#                                     period="10 seconds"\
+#                                     max_download="10 Mb"\
+#                                     shmem_size="64 Mb"/>\
+#                     <cfg:StatsReporter host_port="dc-server2.ocslab.com:91"\
+#                                     period="2 minutes"\
+#                                     shmem_size="64 Mb"/>\
+#                 </cfg:NBO>
+#                 }
+                s/use_geoip="true"/use_geoip="false"/
+            ' < "${devel_xml_src}" > "${devel_xml}"
+        fi
+    fi
+
+    develenv_xml="${devel_xml%.xml}-env.xml"
+
+    if [ ! -f "${develenv_xml}" ]
+    then
+        cat > "${develenv_xml}" <<EOF
+<cfg:Environment
+  xmlns:cfg="http://www.phorm.com/datacapture/cms/cfg"
+  base_port="${base_port2}"
+  effective_group="${effective_group}"
+  effective_user="${effective_user}"
+  install_root="${opt_dir}"
+  snmp_agent="${snmp_agent}"
+  snmp_agentx_socket="${HOME}/snmp/agentX"
+  stest_config="true"
+  ssh_key="${ssh_key}">
+
+  <cfg:mysql
+    host="localhost"
+    user="${effective_user}"
+    passwd="a"
+    db="fp"/>
+</cfg:Environment>
+EOF
+    fi
+
+    echo -n "Creating config for ${devel_xml_base} base port ${base_port2}..."
+    $shell_wrapper "${deploy_sh} ${devel_xml}" |
+        show_progress || die2
+
+    create_dir "$opt_dir/var"
+    create_dir "$opt_dir/var/run"
+    cp "${unixcommons_dir}/Data/loglevel.control" "$opt_dir/var/run"
+
+    if [ "$instantiate_stubs" == "yes" ]
+    then
+        stubs
+    fi
+    unset base_port2
+
+    rm "$opt_dir/etc/mysql-ctl.sh" "$opt_dir/etc/mysql-schema.sh"
+    ln -s "${datacapture_dir}/CMS/plugin/data/mysql-schema.sh" "$opt_dir/etc/mysql-schema.sh"
+    ln -s "${datacapture_dir}/CMS/plugin/data/mysql-ctl.sh" "$opt_dir/etc/mysql-ctl.sh"
+}
+export -f datacapture_genconf
+
+
+adserver_getdbparams()
+{
+    local tmp=$(
+        m4 -DXML_FILE=$opt_dir/etc/colocation.xml <<'EOF' |\
+        perl -Mstrict -MXML::Parser
+            use Data::Dumper;
+            my $xml_file = 'XML_FILE';
+            my $p = new XML::Parser(Style => 'Tree');
+            my $xml = $p->parsefile($xml_file);
+            my $dbconn = el(dbConnectionForRead =>
+                el(central =>
+                el(cluster =>
+                el(configuration =>
+                el(serviceGroup =>
+                el(application =>
+                el('colo:colocation' => $xml)))))))->[0];
+            print map { "${_}='$dbconn->{$_}'\n" } keys %$dbconn;
+
+            sub el
+            {
+                my $tag = shift;
+                my $xml = shift;
+                for (my $i = 0; $i < @$xml; ++$i) {
+                    my $e = $xml->[$i];
+                    ref($e) eq 'HASH' and
+                        next;
+                    if ($e eq '0') {
+                        ++$i; next;
+                    }
+                    if ($e eq $tag) {
+                        return $xml->[$i + 1];
+                    }
+                }
+            }
+EOF
+    );
+    eval "$tmp"
+}
+export -f adserver_getdbparams
+
+sqlplus()
+{(
+    adserver_getdbparams
+    rlwrap sqlplus "${user}/${password}@${db}"
+)}
+export -f sqlplus
+
+rmlogs()
+{
+    set -- adserver -- "$@"
+    product_cmd
+
+    require_variable log_dir
+    rm -v -rf ${log_dir}/* |
+        show_progress "Removing logs"
+}
+
+# datacapture-specific
+rmbase()
+{
+    # FIXME: opt_dir is generated in get_product_vars
+    rm -v -rf "$opt_dirFIXME/var/lib/mysql" |
+        show_progress "Removing DB"
+}
+
+# datacapture-specific TODO: make universal
+envir()
+{
+    # FIXME: opt_dir is generated in get_product_vars
+    [ -f $opt_dirFIXME/etc/environment.sh ] &&
+        source $opt_dir/etc/environment.sh
+}
+
+jail()
+{
+    schroot -c ocslab
+}
+
+oixmgr()
+{(
+    require_variable oixmgr_bin
+    [ "$clear_before_start" == "yes" -a "$1" == "start" ] && rmlogs
+    # FIXME: sms_xml is now generated in get_product_vars()
+    [ -f "$sms_xml" ] || genconf
+    $shell_wrapper "${oixmgr_bin} $sms_xml $*"
+)}
+
+adserver()
+{(
+    set -- adserver -- "$@"
+    product_cmd
+    require_variable oixmgr_bin
+
+    case "$1" in
+    start)
+        [ "$clear_before_start" == "yes" ] &&
+            rmlogs
+        [ -d "${var_dir}/cache/Users1" ] ||
+            $shell_wrapper "${oixmgr_bin} -C $etc_dir/adserver/ -f server-adserver-phorm start ui-distribution force=1"
+            $shell_wrapper "${oixmgr_bin} -C $etc_dir/adserver/ -f server-adserver-phorm start em-distribution force=1"
+        ;;
+    esac
+
+    set +e
+    echo "Phorm zone"
+    $shell_wrapper "${oixmgr_bin} -C $etc_dir/adserver/ -f server-adserver-phorm $*"
+    echo "ISP zone"
+    $shell_wrapper "${oixmgr_bin} -C $etc_dir/adserver/ -f server-adserver-isp $*"
+    measure_finish adserver adserver
+)}
+
+adstest()
+{(
+    set -- adserver -- "$@"
+    product_cmd
+    AutoTests -p "$var_dir/run/Tests/AutoTests/LocalParams.xml" -c "$etc_dir/TestConfig/AutoTests/AutoTestsConfig.xml" -v -w "$@"
+    measure_finish adstest adserver
+)}
+export -f adstest
+
+tailerr()
+{(
+    set -- adserver -- "$@"
+    product_cmd
+    cd "$var_dir/log"
+    tail -f $(find -type f -name '*.error')
+)}
+export -f tailerr
+
+tailtrc()
+{(
+    set -- adserver -- "$@"
+    product_cmd
+    cd "$var_dir/log"
+    tail -f $(find -type f -name '*.trace')
+)}
+export -f tailtrc
+
+stest()
+{
+    stest_conf="devel.conf"
+    ${opt_dir}/share/stest/stest.pl -c "${opt_dir}/share/stest/${stest_conf}" "$@"
+}
+
+stest_kwm()
+{
+    stest -e ${opt_dir}/share/stest/ptest.pl "$@"
+}
+
+stest_poo()
+{
+    stest -e ${opt_dir}/share/stest/pootest.pl "$@"
+}
+
+fpstest()
+{
+    stest -e ${opt_dir}/share/stest/fptest.pl "$@"
+}
+
+kwm_test()
+{
+    kwm_conf="KMParsingSettingsSchema-128.xml"
+    [ "$1" = "129" ] && {
+        shift
+        kwm_conf="KMParsingSettingsSchema-129.xml"
+    }
+
+    kwmtest_conf="${opt_dir}/share/tests/KWMAutoTestTool/KWM_TP.xml"
+    "${opt_dir}/bin/KWMAutoTestTool" -c "${opt_dir}/etc/${kwm_conf}" -p "${kwmtest_conf}" "$@"
+}
+
+pstest()
+{(
+    require_variable base_port
+    base_port2=$((base_port + 128))
+    "${opt_dir}/bin/pstest"
+    unset base_port2
+)}
+
+snmpwalk()
+{(
+    product=adserver
+    get_product_vars
+
+    require_variable base_port
+    local snmpd_port=$((base_port + 161))
+
+    /usr/bin/snmpwalk -v2c -c public \
+        -M +$product_dir/CMS/Plugin/data/mibs:$product_dir/CMS/Plugin/data/mibs/Controlling \
+        -m ALL localhost:${snmpd_port} "$@"
+)}
+export -f snmpwalk
+
+fatmost()
+{
+    ps -eo pid,rss,pcpu,pmem,cmd -ww --sort=rss|grep "${1-.}"|tail -n 1
+}
+
+fatmost_pid()
+{
+    fatmost "$1"| (
+        read a b
+        echo $a
+    )
+}
+
+log_fatmost()
+{
+    while true
+    do
+        echo $(date '+%b %d %T') $(fatmost "$1") |
+            tee -a fatmost.log
+        sleep 5m
+    done
+}
+
+watch_fatmost()
+{
+    watch -n 1 sh -c "'fatmost ''$1'"
+}
+
+
+merge()
+{(
+    product_cmd
+    validate_for_branch $product ||
+        die2
+
+    export PROJECT_ROOT="${svnroot}/${product_svnhome}"
+
+
+    trunk_dir=$(get_variable "${product}_trunk_dir")
+
+    if [ -f "${trunk_dir}/default.config.t" ]
+    then
+        builtin cd "${trunk_dir}"
+        svn up
+    else
+        checkout "${product}_trunk" ||
+            die
+        builtin cd "${trunk_dir}"
+    fi
+
+    "${svnutils}/svnmerge.sh" "${product_svntask}"
+)}
+
+update()
+{(
+    product_cmd
+    validate_for_branch $product ||
+        die2
+
+    export PROJECT_ROOT="${svnroot}/${product_svnhome}"
+
+    cd "$product_dir"
+
+    svn up
+    "${svnutils}/svnmerge.sh"
+)}
+
+irev()
+{(
+    set -e
+    wroot=$(svn info "$@"|grep 'Working Copy Root Path'|(IFS=: read a b && echo $b))
+    svn pg initial-revision "$wroot"
+)}
+export -f irev
+
+review()
+{(    
+    svn diff -r $(irev "$@"):HEAD --ignore-properties "$@"
+)}
+export -f review
+
+list()
+{
+    (cd "${project_dir}"; find . -maxdepth 1 -type d|sort)
+}
+
+shell()
+{
+    export LD_LIBRARY_PATH_ORIG=$LD_LIBRARY_PATH
+    export PATH=${task_dir}/bin:${PATH:+:$PATH}
+    export PATH_ORIG=$PATH
+
+    # FIXME: use $opt_dir_task in case of task
+    export PATH=${task_dir}/bin:${opt_dir_trunk}/etc:${opt_dir_trunk}/bin${PATH_ORIG:+:$PATH_ORIG}
+    export LD_LIBRARY_PATH=${opt_dir_trunk}/lib${LD_LIBRARY_PATH_ORIG:+:$LD_LIBRARY_PATH_ORIG}
+    # required by schroot-ed shell:
+    export LD_LIBRARY_PATH_PRESERVED=$LD_LIBRARY_PATH
+
+    mkdir -p "${task_dir}"
+    cd "${task_dir}"
+
+    export PS1="{$task_name} "$(bash -ic 'echo -n "${PS1}"')
+    export PROMPT_COMMAND_SAVED=$(bash -ic 'echo -n "${PROMPT_COMMAND}"')
+
+    if [ "$option_tab_names" = "y" ]
+    then
+        [ -n "$KONSOLE_DBUS_SESSION" ] &&
+            qdbus org.kde.konsole $KONSOLE_DBUS_SESSION setTitle 1 "$task_name"
+    fi
+
+    # TODO: tab-completion over CDPATH (and more)
+    export CDPATH=".:${task_dir}:${datacapture_dir}:${datacapture_build_dir}:${keywordmining_dir}:${keywordmining_build_dir}:${unixcommons_dir}:${unixcommons_build_dir}:${opt_dir}:${opt_dir}/var"
+
+    export MYSQL_HISTFILE="${task_dir}/.mysql_history"
+    export GDBHISTFILE="${task_dir}/.gdb_history"
+
+    process_commands export_command
+
+    export bush_subshell=1
+
+    eval export help_msg uservars $(variables)
+    export PROMPT_COMMAND=init_interactive_shell
+    bash --norc -o pipefail
+}
+
+cd()
+{
+    arg=$1
+    arg=${arg%${build_suffix}}
+
+    p=$(product_name_deprecated $arg) || {
+        builtin cd "$@"
+        return
+    }
+
+    dirname=$(get_variable "${p}_dir")
+    [ "$1" ] && [ "$1" != $arg ] && dirname=${dirname}${build_suffix}
+    builtin cd $dirname
+}
+export -f cd
+
+cdt()
+{
+    cd ${task_dir}
+}
+
+# FIXME: datacapture independence, rename to 'checkout-review'
+review_deprecated()
+{
+    location $review_dir
+    datacapture_checkout ||
+        die "datacapture_checkout failed"
+
+    # create project here
+    true
+}
+
+verbose()
+{
+    case "$1"
+    in
+    on|1|y)
+        option_verbose=y
+        echo "verbose was set to \"on\""
+        ;;
+    off|0|n)
+        unset option_verbose
+        echo "verbose was set to \"off\""
+        ;;
+    *)
+        if [ "$option_verbose" ]
+        then
+            echo "verbose is \"on\""
+        else
+            echo "verbose is \"off\""
+        fi
+        ;;
+    esac
+}
+
+show()
+{
+    [ -z "$1" ] && eval set -- $(variables)
+    while [ -n "$1" ]
+    do
+        eval echo $1=\\\''$'$1\\\'
+        shift
+    done
+}
+
+save()
+{
+    show > "${task_dir}/.bsvars" && echo Settings stored to .bsvars
+}
+
+load()
+{
+    source "${task_dir}/.bsvars" && echo Settings restored from .bsvars
+}
+
+pack()
+{
+    cd "${task_dir}/.."
+    archive="${task_name}.tar.bz2"
+    tar -cjvf "${archive}" --exclude="*${build_suffix}" "${task_name}" |
+        show_progress "Packing into ${archive}"
+}
+
+sdir()
+{
+    p=$(product_name_deprecated $1) || die "$p"
+    shift
+
+    set_variable "${p}_dirname" "$1"
+    set_variable "${p}_dir" "${task_dir}/${1}"
+    set_variable "${p}_build_dir" "${task_dir}/${1}${build_suffix}"
+    set_variable "${p}_tags" "${task_dir}/${1}.tags"
+}
+export -f sdir
+
+help()
+{
+    if [ "$1" ]
+    then
+        builtin help "$@"
+    else
+        echo -e "$help_msg"
+    fi
+}
+
+################## Utility functions 2 ##################
+
+get_task_number()
+{
+    echo "$1"|sed -n 's/^\([[:digit:]]\+\)-.\+$/\1/; /^[[:digit:]]\+$/ p'
+}
+
+get_task_name()
+{
+    task_name=$(find ${project_dir} ${review_dir} -maxdepth 1 -type d -regex ".+/${1}\(-[^/]+\)?" -printf '%P' -quit 2>/dev/null)
+    [ -z "$task_name" ] && task_name=$1
+    echo $task_name
+}
+export -f get_task_name
+
+declare_command()
+{
+    help_msg="${help_msg}\t${1} ${2}\n"
+}
+
+export_command()
+{
+    export -f $1
+}
+
+uservar()
+{
+    if [ -n "$2" ]
+    then
+        eval export $1="${2}"
+    else
+        eval export $1
+    fi
+    uservars="${uservars} ${1}"
+}
+
+default()
+{
+    local flags=$-; set +vx
+    eval val='$'${1}
+    [ -z "$val" ] && eval $1="'$2'"
+    set -$flags
+}
+export -f default
+
+default_value()
+{
+    uservar $1
+    default "$@"
+}
+
+remove()
+{
+    rm -rf "${task_dir}"
+    exit $?
+}
+
+create_ssh_key()
+{
+    ssh-keygen -t dsa -N "" -f ~/.ssh/id_dsa &&
+    cat ~/.ssh/id_dsa.pub >> ~/.ssh/authorized_keys &&
+    cat $HOME/.ssh/id_dsa.pub | ssh svn.ocslab.com \
+        'mkdir -p $HOME/.ssh && cat >> $HOME/.ssh/authorized_keys' &&
+    echo Installed public key on svn.ocslab.com
+}
+
+detect_svnpath()
+{(
+    p=$(product_name_deprecated $1)
+    shift
+
+    [ "$p" = "keywordmining" -o "$p" = "datacapture" ] ||
+        die "You must specify keywordmining or datacapture"
+
+    src_dir=$(get_variable ${p}_dir)
+    svnhome=$(get_variable ${p}_svnhome)
+
+    if [ -d "${src_dir}" ] &&
+        svnpath=`svn info "${src_dir}" 2>/dev/null | grep '^URL: '`
+    then
+        svnpath2=${svnpath##"URL: ${svnroot}/${svnhome}/"}
+        if [ "${svnpath2}" -a "${svnpath}" != "${svnpath2}" ]
+        then
+            eval ${p}_svnpath="${svnhome}/${svnpath2}"
+        fi
+        unset svnpath svnpath2
+    fi
+)}
+
+cpprog_ln()
+{
+    if [ "$3" ]
+    then
+        ln -s -f `pwd`/$2 $3;
+    else
+        ln -s -f $1 $2;
+    fi
+}
+export -f cpprog_ln
+
+setup_linked()
+{
+    local enabled=false
+    [[ ":$PATH:" == *":${alternative_install}:"* ]] &&
+        enabled=true
+
+    case "$option_linked" in
+    y*) $enabled ||
+            PATH="${alternative_install}:${PATH}"
+        export CPPROG=cpprog_ln
+        export PERL5LIB=${alternative_install}${PERL5LIB:+:$PERL5LIB}
+        ;;
+    *)
+        $enabled && {
+            local tmp=":${PATH}:"
+            tmp=${tmp/:${alternative_install}:/:}
+            tmp=${tmp%:}
+            tmp=${tmp#:}
+            PATH=$tmp
+        }
+        unset CPPROG
+        ;;
+    esac
+}
+export -f setup_linked
+
+linked()
+{
+    case "$1"
+    in
+    on)
+        if [ -n "$alternative_install" ]
+        then
+            option_linked=y
+            setup_linked
+            echo "linked was set to \"on\""
+        else
+            echo "Can't set linked \"on\", configure 'alternative_install' first!" >&2
+        fi
+        ;;
+    off)
+        unset option_linked
+        setup_linked
+        echo "linked was set to \"off\""
+        ;;
+    *)
+        if [ "$option_linked" ]
+        then
+            echo "linked is \"on\""
+        else
+            echo "linked is \"off\""
+        fi
+        ;;
+    esac
+}
+
+export_parent()
+{
+    [ -z "$temp_dir" ] &&
+        return
+    cat > "${temp_dir}/export.$$"
+}
+export -f export_parent
+
+import_child()
+{
+    local child_script="${temp_dir}/export.${BASHPID}"
+
+    [ -z "$temp_dir" -o ! -f "${child_script}" ] &&
+        return
+
+    builtin source "${child_script}"
+    rm "${child_script}"
+}
+export -f import_child
+
+setup_temp_dir()
+{
+    if for d in /dev/shm /tmp
+        do
+            [ -d "$d" ] &&
+                break
+        done
+    then
+        export temp_dir=$(mktemp -d --tmpdir=${d} bush-$$.XXXX)
+        tmp_magic=$(basename $(mktemp --tmpdir=${temp_dir} magic-XXXXXXX))
+        # echo "$temp_dir created, magic ${tmp_magic}!"
+    else
+        echo "Warning: can't find appropriate temporary location, corresponding features will be disabled!" >&2
+    fi
+
+}
+export -f setup_temp_dir
+
+shell_exit()
+{
+    [ -n "${temp_dir}" -a -n "${tmp_magic}" -a -f "${temp_dir}/${tmp_magic}" ] &&
+        rm -rf "${temp_dir}"
+    # echo Exiting from $$...
+}
+export -f shell_exit
+
+shell_child()
+{
+    import_child
+    true
+}
+export -f shell_child
+
+setup_shell()
+{
+    setup_temp_dir
+    trap shell_exit EXIT
+    set -m
+    trap shell_child SIGCHLD
+}
+export -f setup_shell
+
+init_interactive_shell()
+{
+    PROMPT_COMMAND=$PROMPT_COMMAND_SAVED
+    setup_shell
+    get_product && get_product_vars
+    unset init_interactive_shell
+    unset PROMPT_COMMAND_SAVED
+}
+export -f init_interactive_shell
+
+################## Parse command line ##################
+
+parse_options()
+{
+    help_msg="Usage: bush [num[-description]] <command> ...\nbs commands:\n"
+    process_commands declare_command
+
+    optstring_short="tb:uUK:dn:N"
+    optstring_long="\
+        trunk, trunk-mode, \
+        branch:, \
+        unixcommons-src:, uc-src:, \
+        unixcommons-build:, uc-build:, \
+        unixcommons-from:, uc-from:, \
+        unixcommons-own, uc-own, \
+        keywordmining-src:, kw-src:, \
+        keywordmining-build:, kw-build:, \
+        keywordmining-from:, kw-from:, \
+        unixcommons-shared, uc-shared, \
+        keywordmining-shared, kw-shared, \
+        unixcommons-branch:, keywordmining-branch:, \
+        datacapture-trunk, opt-dirname:, \
+        task-name:,
+        nightly"
+
+    TEMP=$(getopt -o "${optstring_short}" --long "${optstring_long}" --name 'bush' -- "$@")
+    if [ $? != 0 ] ; then echo "Terminating..." >&2 ; exit 1 ; fi
+    eval set -- "$TEMP"
+
+    # Some clever detection before options parsing
+    option_autoswitch_product_real=$option_autoswitch_product
+    option_autoswitch_product='n'
+    [ -n "$datacapture_svnhome" ] &&
+        detect_svnpath datacapture
+    [ -n "$keywordmining_svnhome" ] &&
+        detect_svnpath keywordmining
+    option_autoswitch_product=$option_autoswitch_product_real
+
+    while true
+    do
+        case "$1" in
+            -t|--trunk|--trunk-mode)
+                task_dir=$project_dir
+                option_branch=trunk
+                shift;;
+            -b|--branch)
+                task_dir=$project_dir
+                option_branch="$2"
+                shift 2;;
+            --unixcommons-src|--uc-src)
+                unixcommons_dir="$2";
+                shift 2;;
+            --unixcommons-build|--uc-build)
+                unixcommons_build_dir="$2"
+                shift 2;;
+            --keywordmining-src|--kw-src)
+                keywordmining_dir="$2"
+                shift 2;;
+            --keywordmining-build|--kw-build)
+                keywordmining_build_dir="$2"
+                shift 2;;
+            --unixcommons-from|--uc-from)
+                task_from="${project_dir}/$(get_task_name ${2})"
+                unixcommons_dir="${task_from}/${unixcommons_dirname}"
+                unixcommons_build_dir="${unixcommons_dir}${build_suffix}"
+                unixcommons_tags="${unixcommons_dir}.tags"
+                shift 2;;
+            --keywordmining-from|--kw-from)
+                task_from="${project_dir}/$(get_task_name ${2})"
+                keywordmining_dir="${task_from}/${keywordmining_dirname}"
+                keywordmining_build_dir="${keywordmining_dir}${build_suffix}"
+                keywordmining_tags="${keywordmining_dir}.tags"
+                shift 2;;
+            -u|--unixcommons-own|--uc-own)
+                option_unixcommons_own=y
+                shift;;
+            -U|--unixcommons-shared|--uc-shared)
+                unixcommons_dir="${project_dir}/${unixcommons_dirname}"
+                unixcommons_tags="${unixcommons_dir}.tags"
+                unixcommons_build_dir="${project_dir}/${unixcommons_dirname}${build_suffix}"
+                shift;;
+            --unixcommons-branch)
+                unixcommons_svnpath="unixcommons/${2}"
+                unixcommons_dirname=unixcommons-$(basename $2)
+                unixcommons_dir="${project_dir}/${unixcommons_dirname}"
+                unixcommons_tags="${unixcommons_dir}.tags"
+                unixcommons_build_dir="${project_dir}/${unixcommons_dirname}${build_suffix}"
+                shift 2;;
+            --opt-dirname)
+                opt_dirname="${2}"
+                opt_dir_task="${task_dir}/${opt_dirname}"
+                shift 2;;
+            -K|--keywordmining-shared|-kw-shared)
+                shift;;
+            -n|--task-name)
+                task_name="${2}"
+                location "${oix_dir}"
+                shift 2;;
+            -N|--nightly)
+                location "${nightly_dir}" "${nightly_dir}"
+                shift;;
+            --) shift; break;;
+        esac
+    done
+    args=("$@")
+}
+
+if [ "$1" != "help" ]
+then
+    uservars=
+    configuration
+    parse_options "$@"
+    eval set -- "${args[@]}"
+
+    task_num=$(get_task_number "$1")
+
+    if [ -n "$task_num" ]
+    then
+        if [ "$task_num" = "$1" ]
+        then
+            task_name=$(get_task_name $1)
+        else
+            task_name=$1
+        fi
+        shift
+    else
+        task_name=$(basename $(pwd))
+        task_num=$(get_task_number "$task_name")
+
+        if [ -z "$task_num" -a -z "$option_branch" ]
+        then
+            option_branch=trunk
+            task_name=$option_branch
+            task_dir=$project_dir
+        fi
+    fi
+
+    uservar task_name
+    uservar task_num
+
+    if [ "$no_location_set" ]
+    then
+        if [ -d "${review_dir}/${task_name}" ]
+        then
+            location "${review_dir}"
+        else
+            location "${oix_dir}"
+        fi
+    fi
+
+    if [ "$option_unixcommons_own" = y ]
+    then
+        unixcommons_dir="${task_dir}/${unixcommons_dirname}"
+        unixcommons_tags="${unixcommons_dir}.tags"
+        unixcommons_build_dir="${unixcommons_dir}${build_suffix}"
+    fi
+
+    configuration_svn
+    configuration_post
+fi
+
+bush_subshell=0
+
+if [ "$1" ]
+then
+    cmd=$1
+    shift
+    setup_shell
+else
+    cmd=shell
+fi
+
+if [ "$cmd" = show -a ! -d "$task_dir" ]
+then
+    die "No task ${task_name}!"
+fi
+$cmd "$@"
