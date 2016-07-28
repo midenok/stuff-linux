@@ -293,7 +293,7 @@ ELinks(/0.12~pre2.dfsg0-1ubuntu1 (textmode; Debian; Linux 2.6.28-15-generic x86_
 Produce output, that will be usable in C++ code. The array will be in strict predefined order, where less common browsers (i.e. those that try to disguise as another browsers) will be listed first.
 
 ```
-$ ./browserlist-parser.pl -i list_of_all_browsers.html --export-browsers
+$ ./browserlist-parser.pl -i list_of_all_browsers.html --export-browsers --reorder
 {SubString("Crazy Browser", 13), 0},
 {SubString("Avant Browser", 13), 0},
 {SubString("Acoo Browser", 12), 0},
