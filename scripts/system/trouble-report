@@ -1,0 +1,1281 @@
+#!/usr/bin/perl
+# Year: 2010
+
+use strict;
+#use warnings;
+#use diagnostics;
+
+use English;
+
+use Carp;
+use Getopt::Long qw(:config bundling);
+use Pod::Usage;
+
+my %O = (
+    program_root => '/opt/path_to_program',
+    output_dir => '.',
+    size_limit => 1048576,
+    time_limit => 24*60*60,
+    max_scan => 10240
+);
+
+GetOptions(\%O, qw(
+    program_root|program-root|r=s
+    output_dir|output-dir|o=s
+    list|l
+    select|s=s
+    verbose|v
+    time|t=s
+    size_limit|size-limit|S=i
+    time_limit|time-limit|T=i
+    max_scan|max-scan|C=i
+    dry_run|dry-run|n
+    help|h
+)) or die "Error parsing options!\n";
+
+# execution type
+use constant {
+    COMMAND => 0,
+    INTERNAL => 1
+};
+
+# command error by
+use constant {
+    BY_STATUS => 0,
+    BY_STDERR => 1
+};
+
+# read command output from
+use constant {
+    FROM_STDOUT => 0,
+    FROM_STDERR => 1
+};
+
+# options
+use constant {
+    ONELINE => 0,
+    MULTILINE => 1,
+    INTERNAL_OUTPUT => 3
+};
+
+our $entry;
+
+my @LOG_REGISTRY = (
+    {
+        time_entry => \&time_entry_program,
+        suffix => '.log',
+        globs => [qw[
+            var/log/ProgramLog*.log*
+            var/log/ProgramAnotherLog*.log*
+        ]]
+    },
+    {
+        time_entry => \&time_entry_httpd_access,
+        suffix => '.log',
+        globs => ['var/log/httpd*access.log*']
+    },
+    {
+        time_entry => \&time_entry_httpd_error,
+        suffix => '.log',
+        globs => ['var/log/httpd*error.log*']
+    },
+    {
+        time_entry => \&time_entry_system,
+        suffix => '.\d+',
+        suffix_optional => 1,
+        globs => ['/var/log/messages*']
+    }
+);
+
+my %DEFAULTS = (
+    execution => COMMAND,
+    error_by => BY_STATUS,
+    read_from => FROM_STDOUT,
+    extraction_method => undef,
+    options => MULTILINE,
+    error_filename => 'common.txt'
+);
+
+my @REGISTRY = (
+    {
+        title => 'Uptime',
+        command => 'uptime',
+        filename => 'common.txt'
+    },
+    {
+        title => 'Processes by user',
+        command => 'ps uax',
+        filename => 'ps.txt'
+    },
+    {
+        title => 'Process tree',
+        command => 'pstree -p',
+        filename => 'pstree.txt'
+    },
+    {
+        title => 'Network status',
+        command => 'netstat -ntp',
+        filename => 'netstat.txt'
+    },
+    {
+        title => 'Open files',
+        command => '/usr/sbin/lsof',
+        filename => 'lsof.txt'
+    },
+    {
+        title => 'Disk space',
+        command => 'df -h',
+        filename => 'common.txt'
+    },
+    {
+        title => 'IPC handles',
+        command => 'ipcs -a',
+        filename => 'ipcs.txt'
+    },
+    {
+        title => 'Network interfaces',
+        command => '/sbin/ifconfig -a',
+        filename => 'common.txt'
+    },
+    {
+        title => 'Last log files',
+        command => "ls -1rt $O{program_root}/var/log/*|tail|xargs tail",
+        filename => 'logs.txt'
+    },
+    {
+        title => 'RPM packages',
+        command => "rpm -qa --last",
+        filename => 'common.txt'
+    },
+    {
+        title => 'System messages',
+        command => 'tail -100 /var/log/messages',
+        filename => 'logs.txt'
+    },
+    {
+        title => 'Kernel messages',
+        command => 'dmesg | tail -100',
+        filename => 'logs.txt'
+    },
+    {
+        title => 'Configuration',
+        command => ($O{dry_run} ? "echo " : ""). "tar -czvf '$O{output_dir}/configuration.tar.gz' '$O{program_root}/etc'",
+        filename => 'common.txt'
+    },
+    {
+        title => 'Core files',
+        execution => INTERNAL,
+        method => \&core_files,
+        filename => 'cores.txt',
+        gdb => {
+            script => 'thread apply all bt',
+            error_by => BY_STATUS,
+            read_from => FROM_STDOUT
+        },
+        logs => \@LOG_REGISTRY,
+        output_dir => 'cores_logs'
+    },
+    {
+        title => 'Realtime statistics',
+        execution => INTERNAL,
+        options => INTERNAL_OUTPUT,
+        method => \&realtime_stats,
+        proc_commands => [qw[
+            ProgramProc1
+            ProgramProc2
+            ProgramProc3
+            httpd.worker.x86_64
+        ]],
+        registry => [
+            {
+                title => 'System stats',
+                execution => INTERNAL,
+                options => INTERNAL_OUTPUT,
+                method => \&commands_in_parallel,
+                registry => [
+                        {
+                            title => 'Virtual memory stats',
+                            command => 'vmstat 1 5',
+                            filename => 'rt/vmstat.txt'
+                        },
+                        {
+                            title => 'I/O stats',
+                            command => 'iostat 1 5',
+                            filename => 'rt/iostat.txt'
+                        },
+                        {
+                            title => 'CPU stats',
+                            command => 'mpstat -P ALL 1 10',
+                            filename => 'rt/mpstat.txt'
+                        },
+                ]
+            },
+            {
+                title => 'Process memory map after stats for <proc_group> (<pid>)',
+                execution => INTERNAL,
+                method => \&command_for_each_pid,
+                command => 'pmap <pid>',
+                condition => '[ -x `which pmap` ]',
+                error_by => BY_STDERR,
+                filename => 'rt/pmap_<proc_group>_<pid>.txt',
+                options => INTERNAL_OUTPUT
+            }
+        ]
+    },
+    {
+        title => 'Log data for current time',
+        execution => INTERNAL,
+        options => INTERNAL_OUTPUT,
+        method => \&logdata_for_current_time,
+        logs => \@LOG_REGISTRY,
+        output_dir => 'logs'
+    }
+);
+
+use Data::Dumper;
+
+use IPC::Open3;
+use POSIX qw(:sys_wait_h strftime SIGUSR2 SIGTERM);
+use Fcntl qw(F_GETFL F_SETFL O_NONBLOCK);
+
+sub set_nonblock
+{
+    my $fh = shift;
+    my $flags = fcntl(*$fh, F_GETFL, 0)
+        or die "$!";
+    fcntl(*$fh, F_SETFL, $flags | O_NONBLOCK);
+}
+
+sub execute_command
+{
+    my $e = shift;
+    my ($fd_in, $fd_out, $fd_err) = (\*CMD_IN, \*CMD_OUT, \*CMD_ERR);
+    my $waitpid;
+    my $stdout_buf;
+    my $stderr_buf;
+
+    my $cmd_pid = open3 $fd_in, $fd_out, $fd_err, $e->{command};
+
+    set_nonblock($fd_out);
+    set_nonblock($fd_err);
+    do {
+        $waitpid = waitpid ($cmd_pid, WNOHANG);
+        # Slurp entire contents to variable
+        $stdout_buf .= do { local $/; <CMD_OUT> };
+        $stderr_buf .= do { local $/; <CMD_ERR> };
+
+        die "$!" if $waitpid < 0;
+    } until $waitpid > 0;
+    my $rc = $?;
+
+    close CMD_IN;
+    close CMD_OUT;
+    close CMD_ERR;
+
+    if ($stderr_buf =~ m/^open3:/) {
+        return (undef, $stderr_buf);
+    }
+
+    my $error;
+    if ($rc & 127) {
+        $error = "'$e->{command}' died with signal " . ($rc & 127) .
+            (($rc & 128) ? ' (core dumped): ' : ': ') .
+            join(' ', @_), "\n";
+    }
+    $rc = ($rc >> 8);
+    if ($e->{error_by} == BY_STATUS && $rc) {
+        $error = "'$e->{command}' failed with status $rc\n${stderr_buf}\n";
+    } elsif ($e->{error_by} == BY_STDERR && $stderr_buf) {
+        $error = "'$e->{command}' failed with message: ${stderr_buf}";
+    }
+
+    if ($e->{read_from} == FROM_STDOUT) {
+        return ($stdout_buf, $error);
+    } else {
+        return ($stderr_buf, $error);
+    }
+}
+
+sub debug
+{
+    if ($O{verbose}) {
+        print STDERR '(debug)', @_, "\n";
+    }
+}
+
+sub calculate_value
+{
+    my $e = shift;
+    if ($e->{execution} == COMMAND) {
+        debug("Executing command: ", $e->{command});
+        my ($output, $error) = execute_command($e);
+
+        if (defined $e->{extraction_method}) {
+            &{$e->{extraction_method}}($e, $output, $error);
+        } else {
+            $e->{value} = $output;
+            $e->{error} = $error;
+        }
+    } elsif ($e->{execution} == INTERNAL) {
+        &{$e->{method}}($e);
+    }
+    if ($e->{error}) {
+        $e->{value} = '*** ' . $e->{error};
+        print STDERR $e->{error}, "\n";
+    }
+}
+
+sub filter_registry
+{
+    my $registry = shift;
+    my @oneline = grep {
+        $_->{options} == ONELINE
+    } @$registry;
+    my @multiline = grep {
+        $_->{options} != ONELINE
+    } @$registry;
+    return (\@oneline, \@multiline);
+}
+
+sub select_registry
+{
+    my $registry_in = shift;
+    my @registry_out;
+
+    for my $range (split(',', $O{select})) {
+        $range =~ m/^\d+$/ && do {
+            exists $registry_in->[$range]
+                or die "Wrong index: ${range}\n";
+            push @registry_out, $registry_in->[$range];
+            next;
+        };
+        $range =~ m/^(\d+)-(\d+)$/ && do {
+            my $from = $1;
+            my $to = $2;
+            for ($from..$to) {
+                exists $registry_in->[$_]
+                    or die "Wrong index: ${_}\n";
+                push @registry_out, $registry_in->[$_];
+            }
+            next;
+        };
+        die "Wrong range: ${range}\n";
+    }
+    return \@registry_out;
+}
+
+sub system2
+{
+    my $rc = system @_;
+    if ($rc == -1) {
+        die "Can't exec '$_[0]: $!\n";
+    }
+    if ($rc & 127) {
+        die "'$_[0]' died with signal " . ($rc & 127) .
+            (($rc & 128) ? ' (core dumped): ' : ': ') .
+            join(' ', @_), "\n";
+    }
+    return ($rc >> 8);
+}
+
+sub check_condition
+{
+    my $e = shift;
+    if (not exists $e->{condition}) {
+        # condition accepted
+        return 0;
+    }
+    my $rc = system2($e->{condition});
+    return $rc > 0;
+}
+
+sub make_dirs
+{
+    my $outfile = shift;
+    if (! -d $O{output_dir}) {
+        mkdir $O{output_dir}
+            or die "Can't make $O{output_dir}: $!\n";
+    }
+    my $file_dir = dirname($outfile);
+    if ($file_dir eq '.') {
+        return;
+    }
+    $file_dir = $O{output_dir}.'/'.$file_dir;
+    my $rc = system2("mkdir -p ${file_dir}");
+    if ($rc) {
+        die "Can't mkdir -p ${file_dir}: failed with status ${rc}!\n";
+    }
+}
+
+sub generate_report
+{
+    my $registry = shift;
+    my $prev_file;
+    my $fh = \*FH;
+    for $entry (@$registry) {
+        debug("Reporting '" . $entry->{title} . "'");
+
+        if (!defined $entry->{filename}
+            && $entry->{options} != INTERNAL_OUTPUT) {
+            die "'filename' is not defined for '$entry->{title}' (or specify INTERNAL_OUTPUT)!\n";
+        }
+        my $outfile = $entry->{filename};
+        my $format_name = $entry->{format_name};
+        my $condition_failed = check_condition($entry);
+
+        if ($condition_failed) {
+            $outfile = $entry->{error_filename};
+            $entry->{print_entry} = \&print_multiline;
+            my $message = "Condition failed: '".$entry->{condition}."'";
+            $entry->{value} = "*** ${message}";
+            print STDERR $message, "\n";
+        } elsif ($entry->{options} == INTERNAL_OUTPUT) {
+            # output is done with inner subentry
+            calculate_value($entry);
+            if ($entry->{options} == INTERNAL_OUTPUT) {
+                next;
+            }
+            $outfile = $entry->{filename};
+            $format_name = $entry->{format_name};
+        } else {
+            calculate_value($entry);
+        }
+
+        if (!$O{dry_run}) {
+            if (defined $prev_file || $prev_file ne $outfile) {
+                close *$fh;
+                make_dirs($outfile);
+                my $fn = $O{output_dir}.'/'.$outfile;
+                debug("Making ${fn}");
+                open *$fh, '>>', $fn
+                    or die "$!";
+            }
+            &{$entry->{print_entry}}($fh, $entry);
+            $prev_file = $outfile;
+        }
+    }
+    close *$fh;
+}
+
+sub merge_defaults
+{
+    my $registry = shift;
+    my $defaults = shift;
+
+    for my $entry (@$registry) {
+        for my $key (keys %$defaults) {
+            $entry->{$key} = $defaults->{$key}
+                unless exists $entry->{$key};
+        }
+        if (!exists $entry->{print_entry}) {
+            if ($entry->{options} == ONELINE) {
+                $entry->{print_entry} = \&print_oneline;
+            } elsif ($entry->{options} == MULTILINE) {
+                $entry->{print_entry} = \&print_multiline;
+            }
+        }
+    }
+}
+
+use Sys::Hostname;
+
+sub logstamp
+{
+    my $stamp = strftime "%b %d %T ", localtime;
+    $stamp .= hostname;
+}
+
+
+use File::stat;
+use File::Basename;
+
+sub group_log_files
+{
+    my $logtype = shift;
+    my %log_grouped;
+    for my $f (@{$logtype->{globs}}) {
+        my $fileglob = $f;
+        if ($fileglob !~ m/^\//) {
+            $fileglob = $O{program_root} . "/${fileglob}";
+        }
+
+        my @log_files =
+            sort { $a->{mtime} <=> $b->{mtime} }
+            map {
+                my $stat = stat($_);
+                {
+                    name => $_,
+                    mtime => $stat->mtime,
+                    size => $stat->size
+                }
+            } <${fileglob}>;
+
+        while (@log_files) {
+            my $logbase;
+            my $suffix = $logtype->{suffix};
+            if ($log_files[0]->{name} =~ m/^(.+)$suffix/) {
+                $logbase = $1;
+            } elsif ($logtype->{suffix_optional}) {
+                $logbase = $log_files[0]->{name};
+            } else {
+                die "Wrong suffix ${suffix} for ".$log_files[0]->{name};
+            }
+            if ($logtype->{suffix_optional}) {
+                $suffix = "($suffix)?";
+            }
+            $log_grouped{basename($logbase)} = [
+                grep { $_->{name} =~ m/^${logbase}${suffix}/ } @log_files
+            ];
+            @log_files = grep { $_->{name} !~ m/^${logbase}${suffix}/ } @log_files;
+        }
+    }
+    return \%log_grouped;
+}
+
+sub select_log_files
+{
+    my $log_grouped = shift;
+    my $time_first = shift;
+    my $time_last = shift;
+    my $size_max = shift;
+
+    for my $key (keys %$log_grouped) {
+        my $not_late = 1;
+        my $size_left = $size_max;
+        $log_grouped->{$key} = [
+            grep {
+                my $cond = $not_late && $_->{mtime} > $time_first;
+                if ($not_late && $_->{mtime} > $time_last) {
+                    $not_late = 0;
+                }
+                $cond
+            } @{$log_grouped->{$key}}
+        ];
+
+        if ($size_max > 0) {
+            $log_grouped->{$key} = [
+                reverse grep {
+                    my $cond = $size_left > 0;
+                    $size_left -= $_->{size};
+                    if ($size_left < 0) {
+                        $_->{seek} = 0 - $size_left;
+                        $size_left = 0;
+                    }
+                    $cond
+                } reverse @{$log_grouped->{$key}}
+            ];
+        }
+
+        if (@{$log_grouped->{$key}} == 0) {
+            delete $log_grouped->{$key};
+        }
+    }
+    return $log_grouped;
+}
+
+use Date::Parse;
+
+sub time_entry_program
+{
+    $_[0] =~ m/^(\w{3} \d{2} \w{3} \d{4} \d\d:\d\d:\d\d):\d{6}/
+        and return str2time($1, 'UTC');
+    return undef;
+}
+
+sub time_entry_httpd_access
+{
+    $_[0] =~ m/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3} - - \[(\d\d\/\w{3}\/\d{4}:\d\d:\d\d:\d\d [+-]\d{4})\]/
+        and return str2time($1);
+    return undef;
+}
+
+sub time_entry_httpd_error
+{
+    $_[0] =~ m/^\[(\w{3} \w{3} \d\d \d\d:\d\d:\d\d \d{4})\]/
+        and return str2time($1);
+    return undef;
+}
+
+sub time_entry_system
+{
+    $_[0] =~ m/^(\w{3} \d\d \d\d:\d\d:\d\d)/
+        and return str2time($1);
+    $_[0] =~ m/^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}[+-]\d\d:\d\d)/
+        and return str2time($1);
+    return undef;
+}
+
+use Date::Format qw(time2str);
+
+sub show_range
+{
+    my $time_first = shift;
+    my $time_last = shift;
+    return time2str("%d %b %T", $time_first, "UTC").
+        " - ".
+        time2str("%d %b %T", $time_last, "UTC").
+        time2str(" '%Y", $time_last, "UTC");
+}
+
+sub log_parser
+{
+    my $logtype = shift;
+    my $log_files = shift;
+    my $time_first = shift;
+    my $time_last = shift;
+    my $max_size = $O{size_limit};
+    my $max_scan = $O{max_scan};
+    my $state = 0;
+    my $output;
+    my $error;
+
+    OUTER: for (my $i = 0; $i < @$log_files;) {
+        my $log_file = $log_files->[$i];
+        open LOG, $log_file->{name}
+            or do {
+                $error .= $log_file->{name}. ": $!\n";
+                delete $log_files->[$i];
+                debug("Skipping ". $log_file->{name}. " (can't open)");
+                next OUTER;
+            };
+        if ($i > 0) {
+            my $time_entry;
+            while (not defined $time_entry) {
+                $_ = <LOG> or do {
+                    delete $log_files->[$i];
+                    debug("Skipping ". $log_file->{name}. " (empty or wrong format)");
+                    next OUTER;
+                };
+                $time_entry = &{$logtype->{time_entry}}($_);
+            }
+            if ($time_entry < $time_first) {
+                debug("Skipping ". ($log_files->[$i - 1]->{name}));
+                delete $log_files->[$i - 1];
+            }
+        }
+        ++$i;
+    }
+
+    debug("Time range: ". show_range($time_first, $time_last));
+
+    for my $log_file (@$log_files) {
+        open LOG, $log_file->{name}
+            or do {
+                $error .= $log_file->{name}. ": $!\n";
+                next;
+            };
+
+        debug("Parsing ". $log_file->{name});
+
+        my $last_record_time;
+        my $seek_last = find_last_record(*LOG, $log_file->{size}, \$error, $logtype, $log_file, \$last_record_time);
+        if ($seek_last == -1) {
+            $error .= "Error parsing ". $log_file->{name}. " at ${seek_last}\n";
+            next;
+        }
+
+        if ($last_record_time < $time_first) {
+            debug("Skipping ". $log_file->{name}. " (last_record_time < time_first)");
+            next;
+        }
+
+        my $found_last = $last_record_time;
+        my $seek_till = $seek_last;
+        if ($last_record_time > $time_last) {
+            my $seek_last2 = binary_find(*LOG, $seek_last, $time_last, $max_scan, \$error, $logtype, $log_file, \$found_last);
+
+            next
+                if $seek_last2 == -1;
+
+            if ($seek_last2 < $seek_last) {
+                my $seek_last3 = find_last_record(*LOG, $seek_last2, \$error, $logtype, $log_file, \$found_last);
+                if ($seek_last3 == -1) {
+                    $error .= "Error parsing ". $log_file->{name}. " at ${seek_last2}\n";
+                    next;
+                }
+                $seek_last = $seek_last2;
+                $seek_till = $seek_last;
+            } else {
+                $seek_last = $log_file->{size} - 1;
+            }
+        } else {
+            $seek_last = $log_file->{size} - 1;
+        }
+
+        if ($seek_last == 0) {
+            debug("Skipping ". $log_file->{name}. " (first_record_time > time_last)");
+            next;
+        }
+
+        my $seek_first = 0;
+        my $first_record_time = seek_and_parse(*LOG, $seek_first, \$error, $logtype);
+        if ($first_record_time == -1) {
+            $error .= "Error parsing ". $log_file->{name}. " at ${seek_first}\n";
+            next;
+        }
+
+        if ($first_record_time > $time_last) {
+            debug("Skipping ". $log_file->{name}. " (first_record_time > time_last)");
+            next;
+        }
+
+        my $found_first = $first_record_time;
+        if ($first_record_time < $time_first) {
+            $seek_first = binary_find(*LOG, $seek_till, $time_first, $max_scan, \$error, $logtype, $log_file, \$found_first);
+            next
+                if $seek_first == -1;
+        }
+
+        debug("Found range: ". show_range($found_first, $found_last). " (${seek_first} - ${seek_last})");
+
+        if ($seek_last - $seek_first > $max_size) {
+            # maximum size limit is applied
+            $seek_first = seek_and_find(*LOG, $seek_last - $max_size, $time_first, $max_scan, \$error, $logtype, \$found_first);
+            if ($seek_first == -1) {
+                $error .= "Error parsing ". $log_file->{name}. " at ". ($seek_last - $max_size). "\n";
+                next;
+            }
+            debug("Found range after limiting to ${max_size}: ". show_range($found_first, $found_last). " (${seek_first} - ${seek_last})");
+        }
+
+        if (0 == seek(LOG, $seek_first, 0)) {
+            $error .= $log_file->{name}. ": $!\n";
+            next;
+        }
+        my $read_size = $seek_last - $seek_first;
+        my $buf;
+        my $bytes_read = read(LOG, $buf, $read_size);
+        if ($read_size != $bytes_read) {
+            $error .= $log_file->{name}. ": read ${bytes_read} instead ${read_size}\n";
+        }
+        $output .= $buf;
+        close(LOG);
+    } # for
+    return ($output, $error);
+}
+
+# binary_find finds closest record *after* (or equal to) time_find
+
+sub binary_find
+{
+    my $fh = shift;
+    my $seek_last = shift;
+    my $time_find = shift;
+    my $max_scan = shift;
+    my $error = shift;
+    my $logtype = shift;
+    my $log_file = shift;
+    my $time_found = shift;
+
+    my $offset = ($seek_last % 2 > 0 ? 1 : 0);
+    my $seek = int($seek_last / 2);
+    my $delta = $seek + $offset;
+
+    for (; $delta > int($max_scan / 2)
+            && $offset * 2 < $delta;
+        $delta = int($delta / 2) + $offset) {
+        # Find first eligible record from $seek point. $offset will contain
+        # a distance from $seek to found record.
+        my $time_entry = seek_and_parse($fh, $seek, $error, $logtype, \$offset);
+        $offset += ($delta % 2 > 0 ? 1 : 0);
+        if ($time_entry == -1) {
+            $$error .= "Error parsing ". $log_file->{name}. " at ${seek}\n";
+            return -1;
+        }
+        if ($time_entry == -2) {
+            $$error .= "End of file is reached for ". $log_file->{name}. "\n";
+            return -1;
+        }
+        if ($time_entry > $time_find) {
+            if ($seek == 0) {
+                return 0;
+            }
+            $seek -= $delta;
+            $seek = 0 if $seek < 0;
+        } else {
+            $seek += $delta;
+        }
+    }
+    $seek -= $delta * 2;
+    $seek = 0 if $seek < 0;
+    $max_scan = $delta * 4;
+
+    my $seek2 = seek_and_find(*LOG, $seek, $time_find, $max_scan, \$error, $logtype, $time_found);
+    if ($seek2 == -1) {
+        $$error .= "Error parsing ". $log_file->{name}. " at ${seek}\n";
+        next;
+    }
+
+    return $seek2;
+}
+
+sub seek_and_parse
+{
+    my $fh = shift;
+    my $seek = shift;
+    my $error = shift;
+    my $logtype = shift;
+    my $offset = shift;
+    $$offset = 0;
+
+    if (0 == seek($fh, $seek, 0)) {
+        $$error .= "seek_and_parse(): $!\n";
+        return -1;
+    }
+
+    my $c = 0;
+    my $max_lines = 100;
+
+    for (<$fh>) {
+        my $time_entry = &{$logtype->{time_entry}}($_);
+
+        return $time_entry
+            if $time_entry > 0;
+
+        return -1
+            if $c > $max_lines;
+        ++$c;
+        $$offset += length;
+    }
+    return -2;
+}
+
+sub find_last_record
+{
+    my $fh = shift;
+    my $fsize = shift;
+    my $error = shift;
+    my $logtype = shift;
+    my $log_file = shift;
+    my $chunk_size = 400;
+    my $time_entry = shift;
+    my $seek = $fsize;
+    my $seek_till = $seek - $chunk_size * 100;
+    $seek_till = 0
+        if $seek_till < 0;
+
+    $$time_entry = -2;
+
+    while ($$time_entry == -2 && $seek > 0) {
+        $seek -= $chunk_size;
+        $seek = 0
+            if $seek < 0;
+        return -1
+            if $seek < $seek_till;
+        my $offset = 0;
+        $$time_entry = seek_and_parse($fh, $seek, $error, $logtype, \$offset);
+        return -1
+            if $$time_entry == -1;
+        if ($$time_entry > 0 && $seek + $offset < $fsize) {
+            $seek += $offset;
+            last;
+        }
+    }
+
+    my $min_record = 10;
+    my $seek2 = $seek;
+    my $time_entry2 = 0;
+
+    while ($seek2 < $fsize) {
+        if ($time_entry2 > 0) {
+            $$time_entry = $time_entry2;
+            $seek = $seek2;
+        }
+
+        my $offset = 0;
+        $time_entry2 = seek_and_parse($fh, $seek2 + $min_record, $error, $logtype, \$offset);
+
+        return -1
+            if $time_entry2 == -1;
+
+        $seek2 += $min_record + $offset;
+    }
+
+    return $seek;
+}
+
+sub seek_and_find
+{
+    my $fh = shift;
+    my $seek = shift;
+    my $time_find = shift;
+    my $max_scan = shift;
+    my $error = shift;
+    my $logtype = shift;
+    my $time_found = shift;
+
+    my $res = seek($fh, $seek, 0);
+    if (0 == $res) {
+        $$error .= "seek_and_find(): $!\n";
+        return -1;
+    }
+
+    my $bytes_read = 0;
+    for (<$fh>) {
+        $$time_found = &{$logtype->{time_entry}}($_);
+        if ($$time_found >= $time_find) {
+            return $seek + $bytes_read;
+        }
+        $bytes_read += length;
+        if ($bytes_read > $max_scan) {
+            $$error .= "seek_and_find(): record not found!\n";
+            return -1;
+        }
+    }
+    return $seek + $bytes_read;
+}
+
+sub get_log_near_time
+{
+    my $e = shift;
+    my $suffix = shift || '';
+    my $time_about = shift;
+    my $time_last = $time_about + 10;
+    my $time_first = $time_about - $O{time_limit};
+    my $processed = 0;
+
+    if ($suffix && $suffix !~ m/^\./) {
+        $suffix = ".${suffix}";
+    }
+
+    my $output_dir = $e->{output_dir} || '';
+
+    if ($output_dir) {
+        $output_dir = "${output_dir}/";
+    }
+
+    for my $logtype (@{$e->{logs}}) {
+        my $log_grouped = group_log_files($logtype);
+        select_log_files($log_grouped, $time_first, $time_last, $O{size_limit});
+        for my $key (keys %$log_grouped) {
+            my ($output, $error) = log_parser($logtype, $log_grouped->{$key}, $time_first, $time_last);
+            $e->{error} .= $error;
+            if ($output && !$O{dry_run}) {
+                my $outfile = "${output_dir}${key}${suffix}.log";
+                make_dirs($outfile);
+                $outfile = $O{output_dir}."/${outfile}";
+                debug("Writing ${outfile}");
+                open OUT, ">${outfile}"
+                    or do {
+                        $e->{error} .= "${outfile}: $!\n";
+                        next;
+                    };
+                print OUT $output;
+                close OUT;
+            }
+            ++$processed;
+        }
+    }
+
+    if (!$processed) {
+        $e->{error} = "No logs found!";
+        $e->{options} = MULTILINE;
+        $e->{print_entry} = \&print_multiline;
+        $e->{filename} = $e->{error_filename};
+    } else {
+        debug("Processed ${processed} log files");
+    }
+}
+
+sub core_files
+{
+    my $e = shift;
+    my @core_files = map { chomp; $_ } `find -L $O{program_root} -regex '.*/core\.[0-9]+'`;
+    my $output = join("\n", @core_files) . "\n";
+    for my $core (@core_files) {
+        debug("Processing core file ${core}");
+        my $file = `file $core`;
+        $output .= "\n" . `ls -l $core`;
+        $output .= $file;
+        $file =~ m/.*from '(.+)'$/;
+        my $app = $1;
+        if ($app !~ m/^\//) {
+            $app = $O{program_root} . "/bin/${app}";
+        }
+        $e->{gdb}->{command} =<<EOF2;
+gdb --quiet -nx ${app} ${core} <<EOF 2>&1
+$e->{gdb}->{script}
+EOF
+EOF2
+        my ($gdb_out, $gdb_err) = execute_command($e->{gdb});
+        $output .= $gdb_out;
+        $e->{error} .= $gdb_err;
+        get_log_near_time($e, basename($core), stat($core)->mtime);
+    }
+    $e->{value} = (length($output) > 1 ? $output : "No core files found.");
+}
+
+
+####################### Real-time statistics #######################
+
+sub instantiate_entry
+{
+    my $e_in = shift;
+    my $keys = shift;
+    my $macros = shift;
+    my %e_out = %$e_in;
+    for my $key (@$keys) {
+        my $val = $e_in->{$key};
+        for my $macro (keys %$macros) {
+            $val =~ s/<$macro>/$macros->{$macro}/g;
+        }
+        $e_out{$key} = $val;
+    }
+    return \%e_out;
+}
+
+sub command_for_each_pid
+{
+    my $e = shift;
+    my @children;
+
+    for my $proc_group (keys %{$e->{proc_info}}) {
+        for my $pid (@{$e->{proc_info}->{$proc_group}}) {
+            my $child_pid = fork;
+            if (!defined($child_pid)) {
+                die "Can't fork: $!";
+            }
+
+            if ($child_pid) {
+                push @children, $child_pid;
+                next;
+            }
+
+            my $e_new = instantiate_entry($e,
+                [qw[title command filename]],
+                {
+                    proc_group => $proc_group,
+                    pid => $pid
+                });
+            $e_new->{execution} = COMMAND;
+            delete $e_new->{options};
+            my $registry = [$e_new];
+            merge_defaults($registry, \%DEFAULTS);
+            generate_report($registry);
+            exit(0);
+        }
+    }
+    if ($e->{kill_after}) {
+        sleep $e->{kill_after};
+        for (@children) {
+            if (0 == waitpid($_, WNOHANG)) {
+                kill SIGTERM, $_;
+            }
+        }
+    }
+    for (@children) {
+        waitpid($_, 0);
+    }
+}
+
+sub get_ifaces_up
+{
+    my @ifaces;
+    grep {
+        m/^\d+: (\w+\d*): <.*UP.*>/
+            && push @ifaces, $1
+    } `/sbin/ip link`;
+    return \@ifaces;
+}
+
+sub tcpdump_each_iface
+{
+    my $e = shift;
+    my @children;
+    my $ifaces = get_ifaces_up();
+
+    for my $iface (@$ifaces) {
+        my $child_pid = fork;
+        if (!defined($child_pid)) {
+            die "Can't fork: $!";
+        }
+
+        if ($child_pid) {
+            push @children, $child_pid;
+            next;
+        }
+
+        my $e_new = instantiate_entry($e,
+            [qw[title command filename]],
+            {
+                iface => $iface
+            });
+        $e_new->{execution} = COMMAND;
+        delete $e_new->{options};
+        my $registry = [$e_new];
+        merge_defaults($registry, \%DEFAULTS);
+        generate_report($registry);
+        exit(0);
+    }
+    if ($e->{kill_after}) {
+        sleep $e->{kill_after};
+        for (@children) {
+            if (0 == waitpid($_, WNOHANG)) {
+                kill SIGTERM, $_;
+            }
+        }
+    }
+    for (@children) {
+        waitpid($_, 0);
+    }
+}
+
+sub logdata_for_current_time
+{
+    my $e = shift;
+    my $time = $O{time_integer} ? $O{time_integer} : time();
+    get_log_near_time($e, '', $time);
+}
+
+sub commands_in_parallel
+{
+    my $e = shift;
+    my %defaults = %DEFAULTS;
+    $defaults{proc_info} = $e->{proc_info};
+    merge_defaults($e->{registry}, \%defaults);
+    my @children;
+    for my $entry (@{$e->{registry}}) {
+        my $child_pid = fork;
+        if (!defined($child_pid)) {
+            die "Can't fork: $!";
+        }
+
+        if ($child_pid) {
+            push @children, $child_pid;
+            next;
+        }
+
+        generate_report([$entry]);
+
+        exit(0);
+    }
+    for (@children) {
+        waitpid($_, 0);
+    }
+}
+
+sub realtime_stats
+{
+    my $e = shift;
+
+    for my $proc_group (@{$e->{proc_commands}}) {
+        my @pids = map { $_ + 0 } `ps -o pid= -C ${proc_group}`;
+        if (@pids) {
+            $e->{proc_info}->{$proc_group} = \@pids;
+        }
+    }
+    my %defaults = %DEFAULTS;
+    $defaults{proc_info} = $e->{proc_info};
+    merge_defaults($e->{registry}, \%defaults);
+    generate_report($e->{registry});
+}
+
+####################### Print ######################
+
+sub print_oneline
+{
+    my $fh = shift;
+    my $e = shift;
+    print $fh $e->{title}, ': ', $e->{value}, "\n";
+}
+
+sub print_multiline
+{
+    my $fh = shift;
+    my $e = shift;
+    print $fh '::: ', logstamp(), ' ::: ', $e->{title}, "\n",
+        $e->{value}, "\n";
+}
+
+####################### Main #######################
+
+if ($O{help}) {
+    pod2usage(-section => 'SYNOPSIS|COMMANDS', -verbose => 1);
+} elsif ($O{list}) {
+    for (my $i = 0; $i < @REGISTRY; ++$i) {
+        my $e = $REGISTRY[$i];
+        print $i, ': ', $e->{title}, "\n";
+    }
+} else {
+    if ($O{output_dir} =~ m/^(.*)\/$/) {
+        $O{output_dir} = $1;
+    }
+    merge_defaults(\@REGISTRY, \%DEFAULTS);
+    my $registry = \@REGISTRY;
+    if ($O{select}) {
+        $registry = select_registry($registry);
+    }
+    my ($oneline_registry, $multiline_registry) = filter_registry($registry);
+    if ($O{time}) {
+        $O{time_integer} = str2time($O{time});
+        if (!defined $O{time_integer}) {
+            die "Failed to parse time: $O{time}\n";
+        }
+        debug("Parsing for time: ". time2str("%d %b %T %Y UTC", $O{time_integer}, 'UTC'));
+    }
+    generate_report($oneline_registry);
+    generate_report($multiline_registry);
+}
+
+=head1 SYNOPSIS
+
+report.pl [option] ...
+
+=head2 OPTIONS
+
+=over 4
+
+=item B<-r DIR, --program-root=DIR>
+
+Use DIR as program root. Defaults to '/opt/path_to_program'.
+
+=item B<-o DIR, --output-dir=DIR>
+
+Use DIR as output directory where all report files will be stored. Defaults to '.'
+
+=item B<-l, --list>
+
+List all registry entries. Each entry represents some aspect of report.
+
+=item B<-s LIST, --select=LIST>
+
+Select registry entries to be included in report. Defaults to all entries.
+LIST is a comma separated list of index ranges. Example: 0,2,4-9,12-19,24
+
+=item B<-t TIME, --time=TIME>
+
+Extract logs for TIME instead of current time.
+
+=item B<-T TIME_LIMIT, --time-limit=TIME_LIMIT>
+
+Extract log data not early than TIME_LIMIT seconds. Defaults to 1 day.
+
+=item B<-S SIZE_LIMIT, --size-limit=SIZE_LIMIT>
+
+Extract log data not larger than SIZE_LIMIT bytes. Defaults to 1 megabyte.
+
+=item B<-C MAX_SCAN, --max-scan=MAX_SCAN>
+
+Sets maximum log record size (in bytes). Must be always larger than actual log records.
+Will generate parsing error when it will find record larger than this value.
+Defaults to 10 kilobytes.
+
+=item B<--dry-run, -n>
+
+Dry run. Do not write any files. May not work for all procedures.
+
+=item B<-v, --verbose>
+
+Print verbose messages about running commands and other debugging information.
+
+=item B<-h, --help>
+
+Print brief help message and exit.
+
+=back
+
+=head1 AUTHOR
+
+Aleksey Midenkov E<lt>midenok@gmail.comE<gt>
+
+=cut
