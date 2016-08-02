@@ -1,4 +1,6 @@
 #!/bin/sh
+# requires inotify-tools
+
 exec </dev/null
 watch=$1
 shift
