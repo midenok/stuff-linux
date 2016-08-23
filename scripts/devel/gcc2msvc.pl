@@ -14,19 +14,10 @@ my $ROOTMOUNT;
 my $WD;
 my $unix2winpath;
 
-sub cygwin2winpath
+sub check_mounts
 {
     my $fp = $_[0];
-    if (substr($fp,1,1) eq ':')
-    {
-        $fp =~ s/\//\\/g;
-        return $fp;
-    }
-    if (substr($fp,0,1) ne '/')
-    {
-        $fp =~ s/\//\\/g;
-        return "$WD\\$fp";
-    }
+
     foreach(keys %MOUNTS)
     {
         if ($fp =~ /^$_\/(.*)$/)
@@ -40,6 +31,31 @@ sub cygwin2winpath
     return $ROOTMOUNT.$fp;
 }
 
+sub cygwin2winpath
+{
+    my $fp = $_[0];
+    if (substr($fp,1,1) eq ':')
+    {
+        $fp =~ s/\//\\/g;
+        return $fp;
+    }
+    if (substr($fp,0,1) ne '/')
+    {
+        $fp =~ s/\//\\/g;
+        return "$WD\\$fp";
+    }
+    return check_mounts($fp);
+}
+
+sub linux2winpath
+{
+    my $fp = $_[0];
+    if (substr($fp,0,1) ne '/') {
+        $fp = cwd() . $fp;
+    }
+    return check_mounts($fp);
+}
+
 sub convert_line
 {
     if (/^([^ :]+):([0-9]+):([0-9]+): (.*)$/) {
@@ -50,29 +66,43 @@ sub convert_line
     }
 }
 
-if (-d $ENV{WINDIR}) {
-    $WD = `cmd /c cd`;
-    $/ = "\r\n";
-    chomp $WD;
-    $/ = "\n";
-    $unix2winpath=\&cygwin2winpath;
-
-    foreach(`mount`)
-    {
-        if (/^([^ \t]+) on ([^ \t]+) /)
+sub setup
+{
+    if (-d $ENV{WINDIR}) {
+        $WD = `cmd /c cd`;
+        $/ = "\r\n"; chomp $WD; $/ = "\n";
+        $unix2winpath=\&cygwin2winpath;
+    
+        foreach(`mount`)
         {
-            if ($2 eq '/')
+            if (/^([^ \t]+) on ([^ \t]+) /)
             {
-                $ROOTMOUNT = $1;
-            }
-            else
-            {
-                $MOUNTS{$2} = $1;
+                if ($2 eq '/')
+                {
+                    $ROOTMOUNT = $1;
+                }
+                else
+                {
+                    $MOUNTS{$2} = $1;
+                }
             }
         }
+    } else {
+        use Cwd;
+        my $suff;
+        for my $from (grep { /^MAP_FROM_(.+)$/ and $suff=$1 } keys %ENV) {
+            my $to = "MAP_TO_${suff}";
+            my ($from_, $to_);
+            if (exists $ENV{$to} and $from_=$ENV{$from} and $to_=$ENV{$to}) {
+               if (substr($from_, 0, 1) ne '/') {
+                    $from_ = $ENV{HOME}. "/${from_}";
+                }
+                $MOUNTS{$from_} = $to_;
+            }
+        }
+        $ROOTMOUNT = "";
+        $unix2winpath=\&linux2winpath;
     }
-} else {
-    $unix2winpath=\&linux2winpath;
 }
 
 use File::Basename;
@@ -86,11 +116,15 @@ $invoked_name = basename($invoked_name);
 $invoked_name = 'g++'
     if $invoked_name eq 'gcc2msvc.pl';
 
-# print "This is perl ${invoked_name} override\n";
-
 my $exec = "/usr/bin/${invoked_name}";
 my $exit_status = -1;
 
+if (!defined $ENV{VisualStudioVersion}) {
+    exec $exec, @ARGV or
+        die "Couldn't exec $exec: $!\n";
+}
+
+setup();
 my $pid = open3(\*CHLD_IN, \*CHLD_OUT, \*CHLD_ERR, $exec, @ARGV);
 die "Execute ${exec} failed!"
     unless $pid > 0;
