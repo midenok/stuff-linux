@@ -1,53 +1,16 @@
 #!/bin/bash
-if [ $1 = getenv ]
-then
-    # script is not sourced, export vars
-    out2=$2
-    out=$3
-    shift 3
 
-    echo -n > "$out"
-    for var in "$@"
-    do
-        eval echo $var=\$$var >> "$out"
-    done
-    [ "$*" ] ||
-        echo false >> "$out"
-    mv "$out" "$out2"
-    exit
-fi
-
-if [ ! "$STY" -o $1 != setup ]
+if [ ! "$STY" ]
 then
     # skip setup for non-screen shells
     return
 fi
-shift
-
-screen_import()
-{
-    local env=$(mktemp --tmpdir=${screen_temp_dir} screen_shell.XXXXX)
-    local env2=$(mktemp --tmpdir=${screen_temp_dir} screen_shell.XXXXX)
-    screen -X exec screen-helper getenv "$env" "$env2" SSH_AUTH_SOCK
-
-    local ts0=$(date +%s%3N)
-    local ts1=$ts0
-    while ((ts1 - ts0 < 1000))
-    do
-        [ -s "$env" ] &&
-            break
-        ts1=$(date +%s%3N)
-    done
-    [ -s "$env" ] &&
-        source "$env"
-    rm -rf "$env"
-}
 
 debug_trap_pass()
 {
     local cmd_type=$(type -t "$1")
     # empty cmd_type is for inexistent command or variable definition
-    [ -z "$cmd_type" -o "$cmd_type" = builtin ] &&
+    [ -z "$cmd_type" -o "$cmd_type" = builtin -a "$1" != echo -a "$1" != set -a "$1" != env ] &&
         return 1
 
     case "$1" in
@@ -62,25 +25,13 @@ debug_trap()
     [ -n "$COMP_LINE" ] && return  # do nothing if completing
     [ "$BASH_COMMAND" = "$PROMPT_COMMAND" ] && return
     debug_trap_pass $BASH_COMMAND || return
-    screen_import
-}
 
-setup_temp_dir()
-{
-    unset -f setup_temp_dir
-    if for d in /dev/shm /var/run/screen/S-$USER /tmp
-        do
-            [ -d "$d" ] &&
-                break
-        done
+    if [ -n "$SSH_AUTH_SOCK" -a '!' -S "$SSH_AUTH_SOCK" ]
     then
-        screen_temp_dir=$d
-    else
-        echo "Warning: can't find appropriate temporary location, corresponding features will be disabled!" >&2
-        return 1
+        screen -X exec .! echo '$SSH_AUTH_SOCK' && read -s SSH_AUTH_SOCK
     fi
 }
 
+
 # script is being sourced from .bashrc, setup shell hook
-setup_temp_dir
 trap 'debug_trap' DEBUG
