@@ -1,4 +1,21 @@
-#!/bin/bash
+screen()
+{
+    if [ "$SSH_AUTH_SOCK" ]
+    then
+        for arg in "$@"
+        do
+            case $arg in
+            -*r*|-*R*)
+                $(which screen) "$@" -X setenv SSH_AUTH_SOCK $SSH_AUTH_SOCK ||
+                    return $?
+                ;;
+            esac
+        done
+    fi
+
+    $(which screen) "$@"
+}
+export -f screen
 
 if [ ! "$STY" ]
 then
@@ -19,6 +36,7 @@ debug_trap_pass()
     esac
     return 0
 }
+export -f debug_trap_pass
 
 debug_trap()
 {
@@ -31,7 +49,7 @@ debug_trap()
         screen -X exec .! echo '$SSH_AUTH_SOCK' && read -s SSH_AUTH_SOCK
     fi
 }
+export -f debug_trap
 
-
-# script is being sourced from .bashrc, setup shell hook
-trap 'debug_trap' DEBUG
+grep -q 'trap\s.*\sDEBUG' ~/.bashrc ||
+    echo $'\n'"[ \"\$STY\" ] && trap 'debug_trap' DEBUG"$'\n' >> ~/.bashrc

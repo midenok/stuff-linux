@@ -6,6 +6,7 @@
 #
 
 Defaults	env_reset,shell_noargs,always_set_home
+Defaults env_keep += STY
 
 # Host alias specification
 

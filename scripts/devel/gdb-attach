@@ -62,11 +62,19 @@ pid=$(ps --no-headers U $(whoami) -o pid,ppid,command|(
     exit 1
 }
 
+unset init
+if [ -f .gdb ]
+then
+    init="$(cat .gdb)"
+fi
+
 tmp=$(mktemp /tmp/gdb.XXXXXXXXXX)
 cat > $tmp <<-EOF
     attach $pid
+    $init
     shell rm $tmp
 EOF
+
 
 echo Attaching to $pid
 exec gdb -x $tmp "$@"
