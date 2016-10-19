@@ -44,7 +44,7 @@ fi
 
 $setup_mc
 
-cp -u setup/share/home/* "\$HOME"
+cp -au -t "\$HOME/" setup/share/home/.
 EOF
 
 tar cz $pub_key setup/helpers setup/share setup/bin | ssh -o StrictHostKeyChecking=no "$host" "$remote_code"
