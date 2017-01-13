@@ -1,0 +1,40 @@
+[user]
+	email = midenok@gmail.com
+	name = Aleksey Midenkov
+[push]
+	default = simple
+[branch]
+	autosetuprebase = always
+[alias]
+	co = checkout
+	br = branch
+	ci = commit
+	st = status
+	unstage = reset HEAD --
+	last = log -1 HEAD
+	symref = symbolic-ref
+	rbi = rebase -i
+	cp = cherry-pick
+	amend = commit --amend
+	src = rev-parse --show-toplevel
+	cont = "!f() { git add $(git src) && git rebase --continue; }; f"
+	orig = "!f() { \
+		d=$(git src)/.git/rebase-apply; \
+		if [ -d $d ]; then \
+			git show $(cat $d/original-commit); \
+		else \
+			echo No rebase in progress? >&2; \
+			exit 1; \
+		fi;}; f"
+	rrr = rerere
+	forget = rerere forget
+	bothmod = "!git diff --name-only|uniq && true"
+	con = checkout --conflict=merge
+	conall = "!git con $(git bothmod) && true"
+	con3 = checkout --conflict=diff3
+	showcon = "!git con $(git bothmod) && git diff && git rerere && true"
+[rerere]
+	enabled = true
+[gc]
+	rerereresolved = 180
+	rerereunresolved = 60

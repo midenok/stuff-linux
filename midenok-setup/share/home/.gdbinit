@@ -7,8 +7,10 @@ set print asm-demangle on
 set confirm off
 set pagination off
 set verbose on
-set logging file gdb.log
+set logging file ~/gdb.log
 set logging overwrite
+set history remove-duplicates unlimited
+set verbose off
 
 # for red hat:
 # set build-id-verbose 0
@@ -16,8 +18,17 @@ set logging overwrite
 handle SIGPIPE noprint nostop pass
 handle SIGSTOP print stop nopass
 handle SIGUSR1 noprint nostop pass
+# handle SIGINT print nostop pass
 
 # set inferior-tty /dev/ttya0
+
+define hex
+    set output-radix 16
+end
+
+define dec
+    set output-radix 10
+end
 
 define parent
     set detach-on-fork on
@@ -59,8 +70,6 @@ define logging
     show logging
 end
 
-
-
 define a
     attach $arg0
 end
@@ -75,7 +84,7 @@ end
 define tl
     info threads
 end
-    
+
 define tt
     thread apply all bt
 end
@@ -96,6 +105,64 @@ end
 
 define bl
     info breakpoints
+end
+
+define sb
+    if $argc == 0
+        save breakpoints ~/breaks.gdb
+    else
+        save breakpoints $arg0
+    end
+end
+
+define lb
+    if $argc == 0
+        source ~/breaks.gdb
+    else
+        source $arg0
+    end
+end
+
+define ign
+    if $argc == 1
+        ignore $bpnum $arg0
+    else
+        if $argc > 1
+            ignore $arg0 $arg1
+        else
+            ignore
+        end
+    end
+end
+
+define bstat
+    if $argc > 0
+        set $b = $arg0
+    else
+        set $b = $bpnum
+    end
+    commands $b
+        c
+    end
+end
+
+define blog
+    if $argc > 0
+        set $b = $arg0
+    else
+        set $b = $bpnum
+    end
+    commands $b
+        bt
+        c
+    end
+end
+
+define bbt
+    b $arg0
+    commands
+        bt
+    end
 end
 
 # step macros
