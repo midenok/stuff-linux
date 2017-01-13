@@ -77,4 +77,4 @@ EOF
 
 
 echo Attaching to $pid
-exec gdb -x $tmp "$@"
+exec gdb -quiet -x $tmp "$@"
