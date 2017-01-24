@@ -1,7 +1,52 @@
 #!/bin/bash
-host=$1
-pub_key=$2
-setup_root=1
+
+optstring_long="root,root-only,host,pub-key,verbose,help"
+optstring_short="rRHkvh"
+
+opts=$(getopt -o "${optstring_short}" --long "${optstring_long}" --name "$0" -- "$@") ||
+    exit $?
+eval set -- "$opts"
+
+unset opt_root
+unset host
+unset pub_key
+unset verbose_on
+unset verbose_off
+
+while true
+do
+    case "$1" in
+        -r|--root)
+            opt_root=true
+            shift;;
+        -R|--root-only)
+            opt_root=only
+            shift;;
+        -H|--host)
+            host=$2
+            shift 2;;
+        -k|--pub-key)
+            pub_key=$2
+            shift 2;;
+        -v|--verbose)
+            verbose_on="set -x"
+            verbose_off="set +x"
+            shift;;
+        -h|--help)
+            cat <<EOF
+Usage: setup-host [ -l | -H hostname -k pub_key ] [ -r ]
+-r, --root      Also setup root
+-R, --root-only Only setup root
+-H, --host      SSH mode, connect to remote host
+-k, --pub-key   SSH mode, install pub_key to authorized_keys on remote host
+-v, --verbose   Trace execution
+EOF
+            exit;;
+        --) shift; break;;
+    esac
+done
+
+$verbose_on
 
 read -r -d '' setup_mc <<'EOF'
 if [ -d ~/.config ]
@@ -31,6 +76,26 @@ do
 done
 EOF
 
+read -r -d '' setup_root <<EOF
+sudo -H bash -s <<'EOFF'
+    # cd .ssh
+    sudoers="setup/share/etc/sudoers"
+    if [ -f \$sudoers ]
+    then
+        undo=/tmp/sudoers.undo
+        diff -au \$sudoers /etc/sudoers > \$undo
+        echo \$undo
+        cat \$undo
+        cat \$sudoers > /etc/sudoers
+    fi
+    $setup_mc
+
+    aptitude_dir=\$HOME/.aptitude
+    mkdir -p \$aptitude_dir
+    cp -u -t \$aptitude_dir setup/share/aptitude/*
+EOFF
+EOF
+
 read -r -d '' remote_code <<EOF
 mkdir -p .ssh
 cd .ssh
@@ -47,21 +112,21 @@ $setup_mc
 cp -au -t "\$HOME/" setup/share/home/.
 EOF
 
-tar cz $pub_key setup/helpers setup/share setup/bin | ssh -o StrictHostKeyChecking=no "$host" "$remote_code"
-
-if [ "$setup_root" ]
+if [ -n "$host" ]
 then
-    read -r -d '' remote_code <<EOF
-sudo -H bash -s <<'EOFF'
-    cd .ssh
-    sudoers="setup/share/etc/sudoers"
-    [ -f \$sudoers ] && cat \$sudoers > /etc/sudoers
-    $setup_mc
+    [ "$opt_root" != only ]
+        tar cz $pub_key setup/helpers setup/share setup/bin | ssh -o StrictHostKeyChecking=no "$host" "$remote_code"
 
-    aptitude_dir=\$HOME/.aptitude
-    mkdir -p \$aptitude_dir
-    cp -u -t \$aptitude_dir setup/share/aptitude/*
-EOFF
-EOF
-    ssh -t -o StrictHostKeyChecking=no "$host" "$remote_code"
+    [ "$opt_root" ] &&
+        ssh -t -o StrictHostKeyChecking=no "$host" "$setup_root"
+else
+    [ "$opt_root" != only ] && {
+        eval "$setup_mc"
+    }
+
+    [ "$opt_root" ] && {
+        eval "$setup_root"
+    }
 fi
+
+$verbose_off
