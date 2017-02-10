@@ -135,7 +135,7 @@ define ign
     end
 end
 
-define bstat
+define statb
     if $argc > 0
         set $b = $arg0
     else
@@ -146,7 +146,18 @@ define bstat
     end
 end
 
-define blog
+define btb
+    if $argc > 0
+        set $b = $arg0
+    else
+        set $b = $bpnum
+    end
+    commands $b
+        bt
+    end
+end
+
+define logb
     if $argc > 0
         set $b = $arg0
     else
