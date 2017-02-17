@@ -4,10 +4,12 @@ rsync -aHP \
     --exclude '/proc/*' \
     --exclude '/sys/*' \
     --exclude '/tmp/*' \
+    --exclude '/run/*' \
+    --exclude '/boot/*' \
+    --exclude '/home/*' \
+    --exclude '/opt/*' \
     --exclude '/var/tmp/*' \
     --exclude '/lib/init/rw/*' \
     --exclude '/var/lib/nfs/rpc_pipefs/*' \
     --exclude '/media/*' \
     --exclude '/mnt/*' / "$@"
-
-
