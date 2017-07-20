@@ -29,3 +29,17 @@ do
         ;;
     esac
 done
+
+if [ -d ${dest}/opt/home ]
+then
+    case $op
+    in
+    mount)
+        cmd mount -t aufs -o br:${dest}/opt/home:/home none ${dest}/home
+        echo /opt/home > ${dest}/home/AUFS_MOUNTED
+        ;;
+    umount)
+        cmd umount -l ${dest}/home
+        ;;
+    esac
+fi

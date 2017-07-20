@@ -169,6 +169,14 @@ define logb
     end
 end
 
+define blog
+    b $arg0
+    commands
+        bt
+        c
+    end
+end
+
 define bbt
     b $arg0
     commands
