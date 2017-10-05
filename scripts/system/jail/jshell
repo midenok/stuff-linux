@@ -1,0 +1,7 @@
+#!/bin/bash
+# simple script to run jail shell
+jail_home=/jail
+cd "$jail_home"
+jail=$1
+shift
+exec sudo -E chroot "$jail" sudo -E -u $USER "$@"

@@ -1,5 +1,7 @@
 #!/bin/sh
 rsync -aHP \
+    --delete \
+    --exclude '/jail' \
     --exclude '/dev/*' \
     --exclude '/proc/*' \
     --exclude '/sys/*' \
