@@ -80,3 +80,27 @@ dd()
     "$pv" -tpreb "$infile" | "$dd" "${args[@]}"
 }
 
+alias start='systemctl start'
+alias stop='systemctl stop'
+alias reload='systemctl reload'
+alias restart='systemctl restart'
+alias usctl='systemctl --user'
+alias ustart='systemctl --user start'
+alias ustop='systemctl --user stop'
+alias ureload='systemctl --user reload'
+alias urestart='systemctl --user restart'
+
+mount()
+{
+    if [ -z "$1" ]
+    then
+        /bin/mount -t ext4,vfat,ntfs
+        return $?
+    fi
+    if [ "$1" = -t -a -z "$2" ]
+    then
+        /bin/mount
+        return $?
+    fi
+    /bin/mount "$@"
+}
