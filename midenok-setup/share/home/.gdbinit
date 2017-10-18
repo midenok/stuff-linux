@@ -62,10 +62,15 @@ define confirm
 end
 
 define logging
-    if $argc == 1
-        set logging $arg0
+    if $argc == 0
+        set logging off
+        set logging on
     else
-        set logging $arg0 $arg1
+        if $argc == 1
+            set logging $arg0
+        else
+            set logging $arg0 $arg1
+        end
     end
     show logging
 end

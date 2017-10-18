@@ -15,8 +15,24 @@
 	symref = symbolic-ref
 	rbi = rebase -i
 	cp = cherry-pick
-	amend = commit --amend
 	src = rev-parse --show-toplevel
+	pwb = rev-parse --abbrev-ref HEAD
+	prb = rev-parse --abbrev-ref --symbolic-full-name @{u}
+	pr = "!f() { \
+		wb=$(git pwb); \
+		rb=$(git prb); \
+		echo ${rb%/$wb}; }; f"
+	rename = "!f() { \
+		src=$1; dst=$2; \
+		set -e; \
+		git co $src; \
+		git pull; \
+		remote=$(git pr); \
+		git co -b renamed/$src; \
+		git co -b $dst; \
+		git push -u $remote $dst; \
+		git br -D $src; \
+		git push $remote --delete $src; }; f"
 	cont = "!f() { git add $(git src) && git rebase --continue; }; f"
 	orig = "!f() { \
 		d=$(git src)/.git/rebase-apply; \
@@ -33,6 +49,31 @@
 	conall = "!git con $(git bothmod) && true"
 	con3 = checkout --conflict=diff3
 	showcon = "!git con $(git bothmod) && git diff && git rerere && true"
+	amend = commit --amend
+	abort = rebase --abort
+	skip = rebase --skip
+	upd = "!f() { git fetch -f origin $1:$1; }; f"
+	pushf = "!f() { \
+		br=$(git rev-parse --abbrev-ref HEAD); \
+		rbr=$(git rev-parse --abbrev-ref --symbolic-full-name @{u}); \
+		git fetch check && ( \
+			ch=$(git log ${rbr}..check/${br}); \
+			if [ -z \"$ch\" ]; then \
+				git push -f; \
+			else \
+				echo \"$ch\"; \
+				return 2; \
+			fi) \
+		}; f"
+	pushf2 = "!f() { \
+		br=$(git rev-parse --abbrev-ref HEAD); \
+		rbr=$(git rev-parse --abbrev-ref --symbolic-full-name @{u}); \
+		echo $br; echo $rbr; \
+		git fetch check && ( \
+			exec 5>&1; \
+			ch=$(git log ${rbr}..check/${br}); \
+			echo yes); \
+		}; f"
 [rerere]
 	enabled = true
 [gc]
