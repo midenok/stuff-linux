@@ -1,0 +1,56 @@
+#!/bin/bash
+
+prefix=_
+dirs="
+    /usr/share/plasma/desktoptheme/default/icons
+    /usr/share/plasma/desktoptheme/oxygen/icons"
+files="
+    amarok.svgz
+    audio.svgz
+    battery.svgz
+    device.svgz
+    kdeconnect.svgz
+    kget.svgz
+    klipper.svgz
+    konversation.svgz
+    kopete.svgz
+    korgac.svgz
+    kpackagekit.svgz
+    ktorrent.svgz
+    nepomuk.svgz
+    preferences.svgz
+    printer.svgz
+    slc.svgz
+    view.svgz
+    wallet.svgz"
+
+divert()
+{
+    f=$1
+    shift
+    if [ "$1" == --remove ]
+    then
+        shift
+        dpkg-divert "$@" --rename --remove "${d}/${f}"
+    else
+        dpkg-divert "$@" --divert "${d}/${prefix}${f}" --rename "${d}/${f}"
+    fi
+}
+
+if [ "$1" == --remove ]
+then
+    px=$prefix
+else
+    unset px
+fi
+
+for d in $dirs
+do
+    cd "$d"
+    for f in $files
+    do
+        [ -f "${px}$f" ] &&
+            divert "$f" "$@"
+    done
+
+done
