@@ -1,0 +1,308 @@
+#!/bin/bash
+
+die()
+{
+    [ -n "$1" ] && echo "$1" >&2;
+    exit 1
+}
+
+verbose()
+{
+    $verbose ||
+        return 0
+    echo "$@"
+}
+
+mkdir()
+{
+    local d
+    for d in "$@"
+    do
+        [ -d "$d" ] ||
+            /bin/mkdir $verbose_opt "$d"
+    done
+}
+
+cmd()
+{
+    $dry_run && {
+        echo "$*"
+        return
+    }
+    "$@" || {
+        s=$?
+        if [ $((s & 38)) -ne 0 ]
+        then
+            echo $@
+            exit $s
+        fi
+    }
+}
+
+verbose=false
+unmount=false
+dry_run=false
+jail_home="/mnt/storage/jail"
+jail_name=unnamed
+all_trees="${jail_home}/_trees"
+mount=/bin/mount
+umount=/bin/umount
+persistent_types="ext4"
+virtual_types="sysfs proc devtmpfs devpts"
+exclude_trees=$(dirname "$jail_home")
+bind_trees=
+bind_trees2=/var/cache/apt/archives
+bind_trees_set=false
+
+optstring_long="umount,jail-home:,persistent-types:,exclude-trees:,bind-trees:,bind-trees-extra:,dry-run,verbose,help"
+optstring_short="uj:p:x:b:B:nvh"
+
+opts=$(getopt -o "${optstring_short}" --long "${optstring_long}" --name "$0" -- "$@") ||
+    exit $?
+eval set -- "$opts"
+
+unset verbose_on
+unset verbose_off
+unset verbose_opt
+
+while true
+do
+    case "$1" in
+        -u|--umount)
+            unmount=true
+            shift;;
+        -j|--jail-home)
+            jail_home=$2
+            shift 2;;
+        -p|--persistent-types)
+            persistent_types=$2
+            shift 2;;
+        -x|--exclude-trees)
+            exclude_trees=$2
+            shift 2;;
+        -b|--bind-trees)
+            bind_trees=$2
+            bind_trees_set=true
+            shift 2;;
+        -B|--bind-trees-extra)
+            bind_trees_extra=$2
+            shift 2;;
+        -n|--dry-run)
+            dry_run=true
+            shift;;
+        -v|--verbose)
+            verbose=true
+            verbose_on="set -x"
+            verbose_off="set +x"
+            verbose_opt=-v
+            shift;;
+        -h|--help)
+            cat <<EOF
+    -u|--umount                 Unmount mounted jail
+    -j|--jail-home=DIR          Mounted jails and their trees location (default $jail_home)
+    -p|--persystent-types=FSTYPES Space-separated list of filesystem types to store in aufs trees (default $persistent_types)
+    -x|--exclude-trees=DIRS     Space-separated list of mountpoints to be excluded from being stored in aufs tree (default $exclude_trees)
+    -b|--bind-trees=DIRS        Space-separated list of dirs to be bound (with mount --bind) to jail (value is stored)
+    -B|--bind-trees-extra=DIRS  Same as --bind-trees, but not stored (default $bind_trees2)
+    -v|--verbose                Verbose output
+    -h|--help                   This help
+EOF
+            exit;;
+        --) shift; break;;
+    esac
+done
+
+jail_trees="${all_trees}/${jail_name}"
+jail_root="${jail_home}/${jail_name}"
+bind_file="${jail_trees}/bind_trees"
+
+if [[ $EUID -ne 0 ]]; then
+    die "No root privilege!"
+fi
+
+set -e
+mkdir "$all_trees" "$jail_trees"
+
+# Detect if jail is already mounted or unmount it if requested
+set -e
+$mount |tac |
+while read x y mountpoint z
+do
+    if [[ $mountpoint == $jail_root/* || $mountpoint = $jail_root ]]; then
+        $unmount ||
+            die "${jail_root} is already mounted!"
+        verbose "Unmounting ${mountpoint}"
+        cmd $umount "$mountpoint"
+    fi
+done
+
+$unmount &&
+    exit 0
+
+# Read bind trees
+if ! $bind_trees_set && [[ -f $bind_file ]]; then
+    bind_trees=$(echo $(cat $bind_file))
+    verbose "Read bind trees: ${bind_trees}"
+fi
+
+# Check bind trees
+for bind_dir in $bind_trees
+do
+    [[ $bind_dir != /* ]] &&
+        die "Bind tree ${bind_dir} must be absolute path!"
+    [[ -d $bind_dir ]] ||
+        die "Bind tree ${bind_dir} must be existing directory!"
+done
+
+# Detect persistent trees that should be mounted starting from / and create and mount them on fly
+set -e
+for fstype in $persistent_types
+do
+    $mount -t $fstype |
+    while read x y mountpoint z
+    do
+        for d in $exclude_trees $bind_trees $bind_trees2
+        do
+            [[ $mountpoint = $d ]] &&
+                continue 2
+        done
+
+        mount_dir=${mountpoint#/}
+        if [[ -z "$mount_dir" ]]; then
+            tree_name=_root
+            dest_dir="${jail_root}"
+            mkdir "$dest_dir"
+        else
+            tree_name=${mount_dir////_}
+            dest_dir="${jail_root}/${mount_dir}"
+        fi
+        tree_dir="${jail_trees}/${tree_name}"
+        mkdir "$tree_dir"
+        verbose "Mounting ${tree_dir}:${mountpoint} to ${dest_dir}"
+        cmd $mount -t aufs -o br:${tree_dir}:${mountpoint} none ${dest_dir}
+    done
+done
+
+# Mount bind trees
+set -e
+for bind_dir in $bind_trees $bind_trees2
+do
+    dest_dir="${jail_root}${bind_dir}"
+    verbose "Binding ${bind_dir} to ${dest_dir}"
+    cmd $mount --bind $bind_dir $dest_dir
+done
+
+# Store bind trees
+set -e
+if $bind_trees_set; then
+    if [[ -n "$bind_trees" ]]; then
+        echo -n "$bind_trees" > "$bind_file"
+        verbose "Stored bind trees to ${bind_file}"
+    elif [[ -f $bind_file ]]; then
+        rm $verbose_opt $bind_file
+    fi
+fi
+
+# Detect virtual trees and bind them
+set -e
+for fstype in $virtual_types
+do
+    $mount -t $fstype |
+    while read x y mountpoint z
+    do
+        dest_dir="${jail_root}${mountpoint}"
+        verbose "Binding ${mountpoint} to ${dest_dir}"
+        cmd $mount --bind $mountpoint $dest_dir
+    done
+done
+
+
+exit 0
+
+
+[ -n "$1" ] || exit 1
+tree=/opt/jail-trees/$1
+dest=/opt/jail/$1
+
+if [ $(basename $0) = "mount.sh" ]
+then
+    op=mount
+else
+    op=umount
+fi
+
+
+
+if [ $op = mount ]
+then
+    cmd mount -t aufs -o br:$tree/root:/ none $dest
+fi
+
+if [ $op = umount ]
+then
+    for d in /var/cache/apt/archives /run
+    do
+        cmd umount ${dest}${d}
+    done
+fi
+
+# FIXME: why usr/* and then ln -s?
+
+exclude=/opt/kde3
+
+for d in $tree/usr/* $tree/opt/* $tree/var $tree/home
+do
+    # wildcard was not matched
+    [[ $d =~ \* ]] && continue
+
+    d=${d#$tree}
+
+    [ "$d" = "$exclude" ] && continue
+
+    case $op
+    in
+    mount)
+        [ -d ${dest}${d} ] || mkdir ${dest}${d} || exit 1
+        if [ -d ${tree}${d} ]
+        then
+            cmd mount -t aufs -o br:${tree}${d}${base2:+:$base2$d}:${d} none ${dest}${d}
+        else
+            cmd mount --bind ${src}${d} ${dest}${d}
+        fi
+        ;;
+    umount)
+        cmd umount ${dest}${d}
+        ;;
+    esac
+done
+
+if [ $op = mount ]
+then
+    for d in /var/cache/apt/archives /run
+    do
+        cmd mount --bind ${d} ${dest}${d}
+    done
+fi
+
+for d in /proc /sys /dev /tmp /media /run
+do
+    case $op
+    in
+    mount)
+        cmd mount --rbind $d ${dest}${d}
+        ;;
+    umount)
+        cmd umount -l ${dest}${d}
+        ;;
+    esac
+done
+
+case $op
+in
+mount)
+    [ -L ${dest}/usr/lib64 ] || cmd ln -s lib ${dest}/usr/lib64
+    ;;
+umount)
+    cmd umount $dest
+    ;;
+esac
