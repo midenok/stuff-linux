@@ -33,30 +33,42 @@ debug_trap_skip()
         screen)
             return 0;;
     esac
+
+    # Check if executable is X11 program and detach from terminal:
+    if [[ $cmd_type = file || $cmd_type = alias ]]; then
+        local exe="`which $1`"
+        if [ "$exe" ] && ldd "$exe"| grep -q libX11
+        then
+            setsid "$@"
+            dont_execute=1
+            return 0
+        fi
+    fi
+
     return 1
 }
 export -f debug_trap_skip
 
-debug_trap_x11()
-{
-    if ldd `which $1`|grep -q libX11
-    then
-        setsid "$@"
-        return 0
-    fi
-    return 1
-}
-export -f debug_trap_x11
-
 debug_trap()
 {
-    debug_trap_skip $BASH_COMMAND && return 0
-    debug_trap_x11 $BASH_COMMAND && return 1
+    local cmd=$BASH_COMMAND
+    local saved_set=$-
+    set +x
+    [[ "$trace_trap" && $trace_trap != 0 && $trace_trap != no ]] &&
+        set -x
+    trap DEBUG
+    local dont_execute=0
+    if debug_trap_skip $cmd; then
+        [[ "$saved_set" == *x* ]] && set -x
+        return $dont_execute
+    fi
 
     if [[ -n "$STY" && -n "$SSH_AUTH_SOCK" && ! -S "$SSH_AUTH_SOCK" ]]
     then
         screen -X exec .! echo '$SSH_AUTH_SOCK' && read -s SSH_AUTH_SOCK
     fi
+    [[ "$saved_set" == *x* ]] && set -x
+    return $dont_execute
 }
 export -f debug_trap
 
@@ -67,9 +79,12 @@ then
 fi
 
 grep -q 'trap\s.*\sDEBUG' ~/.bashrc || cat << 'EOF' >>~/.bashrc
+
+### Added by /etc/profile.d/debug_trap.sh:
 if [[ "$(type -t debug_trap)" != function ]]; then
     source /etc/profile.d/debug_trap.sh
 fi
 shopt -s extdebug
+PROMPT_COMMAND="$PROMPT_COMMAND; trap debug_trap DEBUG"
 trap debug_trap DEBUG
 EOF
