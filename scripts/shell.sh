@@ -104,3 +104,14 @@ mount()
     fi
     /bin/mount "$@"
 }
+
+x()
+{
+    if [[ "$-" == *x* ]]; then
+        echo Trace off
+        set +x
+    else
+        echo Trace on
+        set -x
+    fi
+}
