@@ -41,6 +41,7 @@ cmd()
 
 verbose=false
 unmount=false
+list=false
 dry_run=false
 jail_home="/mnt/storage/jail"
 jail_name=unnamed
@@ -54,8 +55,8 @@ bind_trees=
 bind_trees2=/var/cache/apt/archives
 bind_trees_set=false
 
-optstring_long="umount,jail-home:,persistent-types:,exclude-trees:,bind-trees:,bind-trees-extra:,dry-run,verbose,help"
-optstring_short="uj:p:x:b:B:nvh"
+optstring_long="umount,jail-home:,persistent-types:,exclude-trees:,bind-trees:,bind-trees-extra:,list,dry-run,verbose,help"
+optstring_short="uj:p:x:b:B:lnvh"
 
 opts=$(getopt -o "${optstring_short}" --long "${optstring_long}" --name "$0" -- "$@") ||
     exit $?
@@ -87,6 +88,9 @@ do
         -B|--bind-trees-extra)
             bind_trees_extra=$2
             shift 2;;
+        -l|--list)
+            list=true
+            shift;;
         -n|--dry-run)
             dry_run=true
             shift;;
@@ -104,6 +108,8 @@ do
     -x|--exclude-trees=DIRS     Space-separated list of mountpoints to be excluded from being stored in aufs tree (default $exclude_trees)
     -b|--bind-trees=DIRS        Space-separated list of dirs to be bound (with mount --bind) to jail (value is stored)
     -B|--bind-trees-extra=DIRS  Same as --bind-trees, but not stored (default $bind_trees2)
+    -l|--list                   List existing jails
+    -n|--dry-run                Don't execute anything
     -v|--verbose                Verbose output
     -h|--help                   This help
 EOF
@@ -115,6 +121,11 @@ done
 jail_trees="${all_trees}/${jail_name}"
 jail_root="${jail_home}/${jail_name}"
 bind_file="${jail_trees}/bind_trees"
+
+if $list; then
+    find "${jail_home}" -maxdepth 1 -type d -path "${jail_home}/*" -a '!' -path "${all_trees}" -printf "%f\n"
+    exit 0
+fi
 
 if [[ $EUID -ne 0 ]]; then
     die "No root privilege!"
