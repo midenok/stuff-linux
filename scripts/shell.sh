@@ -115,3 +115,23 @@ x()
         set -x
     fi
 }
+
+here()
+{
+    local dir="${1:-$(pwd)}"
+    local tmp=":${PATH}:"; tmp=${tmp/:${dir}:/:}; tmp=${tmp%:};
+    if [ "$HERE_CMD" = unhere ]
+    then
+        PATH="${tmp#:}"
+    else
+        if [ -d "$dir" ]
+        then
+            PATH="${dir}:${tmp#:}"
+        else
+            echo "Wrong directory $dir!" >&2
+            return 1
+        fi
+    fi
+    echo $PATH
+}
+alias unhere="HERE_CMD=unhere here"
