@@ -85,6 +85,6 @@ if [[ "$(type -t debug_trap)" != function ]]; then
     source /etc/profile.d/debug_trap.sh
 fi
 shopt -s extdebug
-PROMPT_COMMAND="$PROMPT_COMMAND; trap debug_trap DEBUG"
+PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }trap debug_trap DEBUG"
 trap debug_trap DEBUG
 EOF
