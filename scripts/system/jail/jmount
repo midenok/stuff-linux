@@ -123,7 +123,7 @@ jail_root="${jail_home}/${jail_name}"
 bind_file="${jail_trees}/bind_trees"
 
 if $list; then
-    find "${jail_home}" -maxdepth 1 -type d -path "${jail_home}/*" -a '!' -path "${all_trees}" -printf "%f\n"
+    find "${all_trees}" -maxdepth 1 -type d -path "${all_trees}/*" -printf "%f\n"
     exit 0
 fi
 
