@@ -1,15 +1,17 @@
 set listsize 30
-set print elements 0
 set disassembly-flavor intel
 set history save on
+set print elements 0
 set print pretty on
 set print asm-demangle on
+set print thread-events off
 set confirm off
 set pagination off
 set verbose on
 set logging file ~/gdb.log
 set logging overwrite
 set history remove-duplicates unlimited
+set history file ~/.gdbhistory
 set verbose off
 
 # for red hat:
@@ -21,6 +23,10 @@ handle SIGUSR1 noprint nostop pass
 # handle SIGINT print nostop pass
 
 # set inferior-tty /dev/ttya0
+
+define reconf
+    source ~/.gdbinit
+end
 
 define hex
     set output-radix 16
@@ -65,6 +71,7 @@ define logging
     if $argc == 0
         set logging off
         set logging on
+        show logging
     else
         if $argc == 1
             set logging $arg0
@@ -72,11 +79,27 @@ define logging
             set logging $arg0 $arg1
         end
     end
-    show logging
 end
 
 define a
     attach $arg0
+end
+
+define btc
+    echo ```c++\n
+    if $argc == 0
+        backtrace
+    else
+        backtrace $arg0
+    end
+    echo ```\n
+end
+
+define recycle
+    b __GI___assert_fail
+    commands
+        r
+    end
 end
 
 # thread macros
@@ -96,16 +119,40 @@ end
 
 # breakpoint macros
 
+define bx
+    break $arg0
+    echo Continuing.\n
+    continue
+end
+
 define bd
     disable breakpoint $arg0
+end
+
+define bdx
+    disable breakpoint $arg0
+    echo Continuing.\n
+    continue
 end
 
 define be
     enable breakpoint $arg0
 end
 
+define bex
+    enable breakpoint $arg0
+    echo Continuing.\n
+    continue
+end
+
 define bc
     delete breakpoint $arg0
+end
+
+define bcx
+    delete breakpoint $arg0
+    echo Continuing.\n
+    continue
 end
 
 define bl
@@ -116,7 +163,7 @@ define sb
     if $argc == 0
         save breakpoints ~/breaks.gdb
     else
-        save breakpoints $arg0
+        save breakpoints ~/$arg0.gdb
     end
 end
 
@@ -124,8 +171,21 @@ define lb
     if $argc == 0
         source ~/breaks.gdb
     else
-        source $arg0
+        source ~/$arg0.gdb
     end
+    info breakpoints
+end
+
+define eb
+    if $argc == 0
+        set $arg = "~/breaks.gdb"
+    else
+        set $arg = "~/$arg0.gdb"
+    end
+    eval "save breakpoints %s", $arg
+    eval "shell mcedit %s", $arg
+    delete
+    eval "source %s", $arg
 end
 
 define ign
@@ -169,24 +229,37 @@ define logb
         set $b = $bpnum
     end
     commands $b
-        bt
+        btc
         c
     end
 end
 
 define blog
-    b $arg0
+    break $arg0
     commands
-        bt
+        btc
         c
     end
 end
 
-define bbt
-    b $arg0
+define b
+    break $arg0
     commands
-        bt
+        btc
     end
+end
+
+define coff
+    define c
+    end
+    echo Ignoring 'c'.\n
+end
+
+define con
+    define c
+        continue
+    end
+    echo Not ignoring 'c'.\n
 end
 
 # step macros
@@ -194,6 +267,20 @@ end
 define nn
     fin
     s
+end
+
+# MariaDB macros
+
+define rassert
+    b __GI___assert_fail
+    commands
+        btc
+        r
+    end
+end
+
+define pitem
+    p dbug_print_item($arg0)
 end
 
 # dumping macros
@@ -206,6 +293,10 @@ define dump_array
         set $p = $p + 1
         set $i = $i + 1
     end
+end
+
+define wh
+    winheight src +8
 end
 
 # perl
@@ -244,3 +335,4 @@ define attach_perl
     perl_stop
 end
 
+source ~/.gdbinit.py
