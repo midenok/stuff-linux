@@ -1,6 +1,6 @@
 #!/bin/bash
 # simple script to run jail shell
-jail_home=/jail
+source jmount
 cd "$jail_home"
 jail=$1
 shift
