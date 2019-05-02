@@ -1,0 +1,41 @@
+#!/bin/sh
+file=$1
+error_filename()
+{
+    echo "Specify file name with .rsa or .dsa extension" >&2
+    exit 1
+}
+
+[ -z "$file" ] && error_filename
+if [ -e "$file" ]
+then
+    echo "$file already exists!" >&2
+    exit 2
+fi
+
+set -e
+
+ext=${file##*.}
+unset cmd
+unset param
+tmppub=$(mktemp)
+tmpfiles="$tmppub"
+case "$ext"
+in
+    rsa) cmd=genrsa;;
+    dsa) cmd=gendsa
+        param=$(mktemp)
+        tmpfiles="$tmpfiles $param"
+        openssl dsaparam -out $param 2048 2> /dev/null
+        ;;
+esac
+
+[ -z "$cmd" ] && error_filename
+
+openssl $cmd -out "$file" $param 2> /dev/null
+openssl $ext -in "$file" -pubout -out "$tmppub" 2> /dev/null
+ssh-keygen -i -f "$tmppub" -mPKCS8 > "$file.pub"
+comment="$(whoami)@$(hostname) [$(date '+%Y-%m-%d'])"
+sed -i -e "s/^\(ssh-.*\)$/\1 $comment/" "$file.pub"
+rm $tmpfiles
+echo Generated "$file" "$file.pub"
