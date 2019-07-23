@@ -1,39 +1,66 @@
+[advice]
+	resolveConflict = false
+[cmake]
+	update-submodules = no
 [user]
 	email = midenok@gmail.com
 	name = Aleksey Midenkov
 [push]
 	default = simple
+	recurseSubmodules = no
+[fetch]
+	recurseSubmodules = on-demand
+[submodule]
+	recurse = true
+[status]
+	submoduleSummary = 0
+[diff]
+	ignoreSubmodules = all
 [branch]
 	autosetuprebase = always
 [alias]
 	co = checkout
 	br = branch
 	ci = commit
-	st = status
+	cdiff = diff --cached
+	st = status -s -uno --ignore-submodules=all
+	modified = "!f() { git st|grep '^ M '|while read a b; do echo "$b"; done; }; f"
 	unstage = reset HEAD --
 	last = log -1 HEAD
 	symref = symbolic-ref
 	rbi = rebase -i
 	cp = cherry-pick
 	src = rev-parse --show-toplevel
-	pwb = rev-parse --abbrev-ref HEAD
+	pbr = rev-parse --abbrev-ref HEAD
+	recent = for-each-ref --sort=-committerdate --count=30 --format='%(refname:short)' refs/heads/
+	back = "!f() { \
+		wb=$(git pbr); \
+		eval `git for-each-ref --sort=-committerdate --count=1 --format='back=%(refname:short)' refs/heads/`; \
+		if [ "$wb" = "$back" ]; then \
+			eval `git for-each-ref --sort=-committerdate --count=2 --format='back=%(refname:short)' refs/heads/`; \
+		fi; \
+		git checkout $back; }; f"
 	prb = rev-parse --abbrev-ref --symbolic-full-name @{u}
 	pr = "!f() { \
-		wb=$(git pwb); \
+		wb=$(git pbr); \
 		rb=$(git prb); \
 		echo ${rb%/$wb}; }; f"
 	rename = "!f() { \
 		src=$1; dst=$2; \
 		set -e; \
-		git co $src; \
+		git checkout $src; \
 		git pull; \
 		remote=$(git pr); \
-		git co -b renamed/$src; \
-		git co -b $dst; \
+		git checkout -b renamed/$src; \
+		git checkout -b $dst; \
 		git push -u $remote $dst; \
 		git br -D $src; \
 		git push $remote --delete $src; }; f"
-	cont = "!f() { git add $(git src) && git rebase --continue; }; f"
+	cont = "!f() { \
+		s=$(git status|head -n1); \
+		if echo $s|grep -q ' rebase '; then \
+			git rebase --continue; \
+		fi;}; f"
 	orig = "!f() { \
 		d=$(git src)/.git/rebase-apply; \
 		if [ -d $d ]; then \
@@ -53,7 +80,18 @@
 	abort = rebase --abort
 	skip = rebase --skip
 	upd = "!f() { git fetch -f origin $1:$1; }; f"
+	pushb = "!f() { git push -u origin $(git pbr); }; f"
+	pushf2 = push --force-with-lease
 	pushf = "!f() { \
+		if ! ourl=$(git remote get-url origin); then \
+			return $?; \
+		fi; \
+		if ! curl=$(git remote get-url check 2>/dev/null); then \
+			git remote add check $ourl; \
+		elif [ "$ourl" != "$curl" ]; then \
+			echo "Remotes URL 'origin' and 'check' must match!" >&2; \
+			return 3; \
+		fi; \
 		br=$(git rev-parse --abbrev-ref HEAD); \
 		rbr=$(git rev-parse --abbrev-ref --symbolic-full-name @{u}); \
 		git fetch check && ( \
@@ -65,17 +103,15 @@
 				return 2; \
 			fi) \
 		}; f"
-	pushf2 = "!f() { \
-		br=$(git rev-parse --abbrev-ref HEAD); \
-		rbr=$(git rev-parse --abbrev-ref --symbolic-full-name @{u}); \
-		echo $br; echo $rbr; \
-		git fetch check && ( \
-			exec 5>&1; \
-			ch=$(git log ${rbr}..check/${br}); \
-			echo yes); \
-		}; f"
+	fork-point = merge-base --fork-point
+	rbo = "!f() { git rebase --onto $1 $(git fork-point $1); }; f"
+	bad = bisect bad
+	good = bisect good
+	current = !git show `cat .git/rebase-merge/stopped-sha`
+	su = submodule update
 [rerere]
 	enabled = true
 [gc]
 	rerereresolved = 180
 	rerereunresolved = 60
+	quiet = 1
