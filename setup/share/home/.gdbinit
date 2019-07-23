@@ -269,6 +269,10 @@ define nn
     s
 end
 
+define basan
+    b __asan::ReportGenericError
+end
+
 # MariaDB macros
 
 define rassert

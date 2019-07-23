@@ -8,6 +8,8 @@
 [push]
 	default = simple
 	recurseSubmodules = no
+[pull]
+	rebase = true
 [fetch]
 	recurseSubmodules = on-demand
 [submodule]
@@ -28,7 +30,7 @@
 	unstage = reset HEAD --
 	last = log -1 HEAD
 	symref = symbolic-ref
-	rbi = rebase -i
+	rbi = "!f() { unset a; [ -z \"$*\" ] && a=HEAD~~~~~~~~~~~~~~~~~~; git rebase -i $a \"$@\"; }; f"
 	cp = cherry-pick
 	src = rev-parse --show-toplevel
 	pbr = rev-parse --abbrev-ref HEAD
@@ -109,9 +111,12 @@
 	good = bisect good
 	current = !git show `cat .git/rebase-merge/stopped-sha`
 	su = submodule update
+	glog = log --graph
 [rerere]
 	enabled = true
 [gc]
 	rerereresolved = 180
 	rerereunresolved = 60
 	quiet = 1
+[cola]
+	spellcheck = false
