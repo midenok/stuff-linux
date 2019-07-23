@@ -1,3 +1,10 @@
+
+;; Added by Package.el.  This must come before configurations of
+;; installed packages.  Don't delete this line.  If you don't want it,
+;; just comment it out by adding a semicolon to the start of the line.
+;; You may delete these explanatory comments.
+(package-initialize)
+
 (defun save-and-close ()
   "<undocumented>"
   (interactive)
@@ -28,12 +35,45 @@
 (global-set-key (kbd "<f10>") 'save-and-close)
 (global-set-key (kbd "<f11>") (lambda () (interactive) (find-file "~/.emacs")))
 (global-set-key (kbd "<f12>") (lambda () (interactive) (kill-emacs 1)))
+(global-set-key (kbd "<f23>") (lambda () (interactive) (switch-to-buffer "*scratch*")))
 
 (setq inhibit-startup-screen t)
 (setq initial-scratch-message nil)
 (setq inhibit-startup-buffer-menu t)
 (setq ring-bell-function 'ignore)
 (setq-default show-trailing-whitespace t)
+(setq scroll-step 1 scroll-conservatively  10000)
+
+;; words include dashes
+(add-hook 'after-change-major-mode-hook
+  (lambda ()
+    (modify-syntax-entry ?- "w")))
+
+;; navigate words skipping spaces
+(require 'misc)
+(global-set-key (kbd "s-f") 'forward-word)
+(global-set-key (kbd "s-b") 'backward-to-word)
+(global-set-key (kbd "M-f") 'forward-to-word)
+
+;; kill space after word
+(defun kill-whitespace ()
+  "If `point' is followed by whitespace kill that.
+Otherwise call `kill-word'"
+  (interactive)
+  (when (looking-at "[ \t\n]")
+      (let ((pos (point)))
+        (re-search-forward "[^ \t\n]" nil t)
+        (backward-char)
+        (kill-region pos (point)))))
+
+;; FIXME: doesn't work
+(defun kill-whitespace-word ()
+  "<undocumented>"
+  (interactive)
+  (unless (kill-whitespace)
+    (kill-word)))
+
+;;(global-set-key (kbd "M-d") 'kill-whitespace-word)
 
 (require 'hlinum)
 (hlinum-activate)
@@ -86,16 +126,18 @@
 (setq auto-save-list-file-prefix
     emacs-tmp-dir)
 
-;; xemacs stuff
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
- '(load-home-init-file t t))
+ '(load-home-init-file t t)
+ '(vc-follow-symlinks t))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
  '(linum-highlight-face ((t (:inherit default :foreground "cyan" :weight bold)))))
+
+
