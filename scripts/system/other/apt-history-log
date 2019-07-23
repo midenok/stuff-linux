@@ -1,0 +1,1 @@
+grep Remove history.log |sed -re 's/^Remove: //; s/\([^)]+\),?//g; s/:amd64//g'

@@ -1,0 +1,8 @@
+#!/bin/sh
+block_dev=${1-/dev/ram0}
+size=$(blockdev --getsize $block_dev) # Size in 512-bytes sectors
+dm_name=${2-delayed}
+delay_r_msec=${3-10}
+delay_w_msec=${4-$delay_r_msec}
+# Create a block device that delays reads and writes for $delay_msec ms
+echo "0 $size delay $block_dev 0 $delay_r_msec $block_dev 0 $delay_w_msec" | dmsetup create $dm_name
