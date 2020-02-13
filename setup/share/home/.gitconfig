@@ -20,21 +20,27 @@
 	ignoreSubmodules = all
 [branch]
 	autosetuprebase = always
+[merge]
+#	conflictstyle = diff3
 [alias]
 	co = checkout
 	br = branch
 	ci = commit
+	sm = submodule
 	cdiff = diff --cached
-	st = status -s -uno --ignore-submodules=all
+	st = status -s -uno
+	stat = show --ignore-submodules=none --stat
 	modified = "!f() { git st|grep '^ M '|while read a b; do echo "$b"; done; }; f"
 	unstage = reset HEAD --
 	last = log -1 HEAD
+	msg = show -s --format=%B
 	symref = symbolic-ref
 	rbi = "!f() { unset a; [ -z \"$*\" ] && a=HEAD~~~~~~~~~~~~~~~~~~; git rebase -i $a \"$@\"; }; f"
 	cp = cherry-pick
 	src = rev-parse --show-toplevel
 	pbr = rev-parse --abbrev-ref HEAD
 	recent = for-each-ref --sort=-committerdate --count=30 --format='%(refname:short)' refs/heads/
+	touch = commit --amend --no-edit --date=now
 	back = "!f() { \
 		wb=$(git pbr); \
 		eval `git for-each-ref --sort=-committerdate --count=1 --format='back=%(refname:short)' refs/heads/`; \
@@ -105,6 +111,20 @@
 				return 2; \
 			fi) \
 		}; f"
+	desub = "!f() { \
+		git show --ignore-submodules=none --submodule=short \
+			--diff-filter=M -G'^Subproject commit' --no-color --format= | \
+		grep '^-' | \
+		while read x module; \
+		do \
+			cd \"$(git rev-parse --show-toplevel)\"; \
+			read x y hash; \
+			module=\"${module##a/}\"; \
+			( cd \"$module\"; git checkout $hash ); \
+			git commit --amend --no-edit \"$module\"; \
+			echo \"Fixed $module to $hash\"; \
+		done; \
+		}; f"
 	fork-point = merge-base --fork-point
 	rbo = "!f() { git rebase --onto $1 $(git fork-point $1); }; f"
 	bad = bisect bad
@@ -112,6 +132,8 @@
 	current = !git show `cat .git/rebase-merge/stopped-sha`
 	su = submodule update
 	glog = log --graph
+	find-merge = "!sh -c 'commit=$0 && branch=${1:-HEAD} && (git rev-list $commit..$branch --ancestry-path | cat -n; git rev-list $commit..$branch --first-parent | cat -n) | sort -k2 -s | uniq -f1 -d | sort -n | tail -1 | cut -f2'"
+	show-merge = "!sh -c 'merge=$(git find-merge $0 $1) && [ -n \"$merge\" ] && git show $merge'"
 [rerere]
 	enabled = true
 [gc]

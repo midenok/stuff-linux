@@ -1,17 +1,18 @@
 set listsize 30
+set confirm off
 set disassembly-flavor intel
 set history save on
+set history remove-duplicates unlimited
+set history file ~/.gdbhistory
 set print elements 0
 set print pretty on
 set print asm-demangle on
 set print thread-events off
-set confirm off
+set style address intensity bold
+set style address foreground magenta
 set pagination off
-set verbose on
 set logging file ~/gdb.log
 set logging overwrite
-set history remove-duplicates unlimited
-set history file ~/.gdbhistory
 set verbose off
 
 # for red hat:
@@ -70,10 +71,16 @@ end
 define logging
     if $argc == 0
         set logging off
+        set style enabled off
         set logging on
         show logging
     else
         if $argc == 1
+            if $arg0 == off
+                set style enabled on
+            else
+                set style enabled off
+            end
             set logging $arg0
         else
             set logging $arg0 $arg1
@@ -271,6 +278,18 @@ end
 
 define basan
     b __asan::ReportGenericError
+end
+
+define rf
+    reverse-finish
+end
+
+define r
+    if $_thread != 0
+        echo Inferior is already running. Use "run" to restart.\n
+    else
+        run
+    end
 end
 
 # MariaDB macros
