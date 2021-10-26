@@ -27,9 +27,13 @@
 	br = branch
 	ci = commit
 	sm = submodule
+	s = show --pretty=oneline
+	d = diff --pretty=oneline
+	contains = branch -r --contains
 	cdiff = diff --cached
 	st = status -s -uno
 	stat = show --ignore-submodules=none --stat
+	cstat = "!git --no-pager diff --name-only --diff-filter=U |xargs grep -c '^=======$'"
 	modified = "!f() { git st|grep '^ M '|while read a b; do echo "$b"; done; }; f"
 	unstage = reset HEAD --
 	last = log -1 HEAD
@@ -142,3 +146,8 @@
 	quiet = 1
 [cola]
 	spellcheck = false
+[log]
+	abbrevCommit = true
+[pager]
+	s = "sed 's/\\x1b\\[[0-9;]*m//g'|filterdiff --annotate|colordiff|less -FRX"
+	d = "sed 's/\\x1b\\[[0-9;]*m//g'|filterdiff --annotate|colordiff|less -FRX"

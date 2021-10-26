@@ -8,12 +8,15 @@ set print elements 0
 set print pretty on
 set print asm-demangle on
 set print thread-events off
+set print repeats 0
 set style address intensity bold
 set style address foreground magenta
 set pagination off
 set logging file ~/gdb.log
 set logging overwrite
 set verbose off
+#set target-async on
+#set non-stop on
 
 # for red hat:
 # set build-id-verbose 0
@@ -318,8 +321,17 @@ define dump_array
     end
 end
 
+define xx
+    dump binary memory /tmp/dump.bin $arg0 $arg0+$arg1
+    shell xxd /tmp/dump.bin
+end
+
 define wh
     winheight src +8
+end
+
+define dmp
+    !source ~/tmp/dmp
 end
 
 # perl
