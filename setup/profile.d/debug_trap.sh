@@ -37,7 +37,7 @@ debug_trap_skip()
     # Check if executable is X11 program and detach from terminal:
     if [[ $cmd_type = file || $cmd_type = alias ]]; then
         local exe="`which $1`"
-        if [ "$exe" ] && ldd "$exe"| grep -q libX11
+        if [ "$exe" ] && ldd "$exe" 2>/dev/null| grep -q libX11
         then
             setsid "$@"
             dont_execute=1

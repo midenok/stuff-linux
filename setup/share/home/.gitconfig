@@ -32,7 +32,7 @@
 	contains = branch -r --contains
 	cdiff = diff --cached
 	st = status -s -uno
-	stat = show --ignore-submodules=none --stat
+	stat = show --ignore-submodules=none --stat --oneline
 	cstat = "!git --no-pager diff --name-only --diff-filter=U |xargs grep -c '^=======$'"
 	modified = "!f() { git st|grep '^ M '|while read a b; do echo "$b"; done; }; f"
 	unstage = reset HEAD --
@@ -89,6 +89,8 @@
 	con3 = checkout --conflict=diff3
 	showcon = "!git con $(git bothmod) && git diff && git rerere && true"
 	amend = commit --amend
+	aa = commit --amend -a --no-edit
+	aaa = commit --amend -a
 	abort = rebase --abort
 	skip = rebase --skip
 	upd = "!f() { git fetch -f origin $1:$1; }; f"

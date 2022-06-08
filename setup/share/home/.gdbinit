@@ -73,22 +73,38 @@ end
 
 define logging
     if $argc == 0
-        set logging off
+        set logging enabled off
         set style enabled off
-        set logging on
+        set logging enabled on
         show logging
+        echo Logging is on\n
     else
         if $argc == 1
-            if $arg0 == off
-                set style enabled on
+            if !$_streq("$arg0", "status")
+                if $_streq("$arg0", "off")
+                    set style enabled on
+                end
+                if $_streq("$arg0", "on")
+                    set style enabled off
+                end
+                set logging $arg0
+                echo Logging is $arg0\n
             else
-                set style enabled off
+                show logging
             end
-            set logging $arg0
         else
             set logging $arg0 $arg1
         end
     end
+end
+
+define colors
+    if $argc == 0
+        set style enabled on
+    else
+        set style enabled $arg0
+    end
+    show style enabled
 end
 
 define a
@@ -332,6 +348,10 @@ end
 
 define dmp
     !source ~/tmp/dmp
+end
+
+define pts
+    eval "!date -d @%d", $arg0
 end
 
 # perl
