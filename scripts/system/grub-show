@@ -1,0 +1,2 @@
+#!/bin/sh
+grep 'menuentry\s\|linux\s\|set root' /boot/grub/grub.cfg |less -S

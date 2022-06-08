@@ -1,5 +1,5 @@
 #!/bin/sh
-sudo rsync -rlptgoP \
+sudo rsync -aUHP \
   --delete --delete-excluded \
   --exclude '/var/cache/*' \
   --exclude '/var/log/*' \
