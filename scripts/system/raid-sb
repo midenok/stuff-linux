@@ -1,0 +1,186 @@
+#!/bin/bash
+LC_ALL=C
+optstring_long="force,metadata:,write,verbose,dry-run,help"
+optstring_short="fe:wvnh"
+
+opts=$(getopt -o "${optstring_short}" --long "${optstring_long}" --name "$0" -- "$@") ||
+    exit $?
+eval set -- "$opts"
+
+unset force
+metadata=0
+unset verbose
+unset dryrun
+
+usage()
+{
+    cat <<EOF
+Usage: $0 device output-file
+EOF
+}
+
+bin2hex()
+{
+    # FIXME: this cannot read zero-byte, it is treated as EOF
+    while read -n 1 byte
+    do
+        printf "%x" "'$byte"
+    done
+    printf "\n"
+}
+
+while true
+do
+    case "$1" in
+        -f|--force)
+            force=y
+            shift;;
+        -e|--metadata)
+            metadata=$2
+            shift 2;;
+        -w|--write)
+            write=y
+            shift;;
+        -v|--verbose)
+            verbose=y
+            shift;;
+         -n|--dry-run)
+            dryrun=echo
+            shift;;
+        -h|--help)
+            usage
+            exit;;
+        --) shift; break;;
+    esac
+done
+
+dev=$1
+bak=$2
+
+if [ -z "$dev" -o -z "$bak" ]; then
+    usage
+    exit
+fi
+
+if [ "$write" ]; then
+    if [ ! -e "$bak" ]; then
+        echo "$bak not exists!" >&2
+        exit 1
+    fi
+elif [ -z "$force" -a -e "$bak" ]; then
+    echo "$bak exists!" >&2
+    exit 1
+fi
+
+# As told in https://raid.wiki.kernel.org/index.php/RAID_superblock_formats
+#
+# and https://raid.wiki.kernel.org/index.php/Superblock
+#
+# Version 0.9:
+# The superblock is 4K long and is written into a 64K aligned block that starts at 
+# least 64K and less than 128K from the end of the device (i.e. to get the address 
+# of the superblock round the size of the device down to a multiple of 64K and 
+# then subtract 64K). The available size of each device is the amount of space 
+# before the super block, so between 64K and 128K is lost when a device in 
+# incorporated into an MD array.
+#
+# Version 1.0:
+# Stored near the end of the device (at least 8K, and less than 12K, from the end).
+#
+# Version 1.1 stored at the start of the device.
+#
+# Version 1.2 like version 1.1 but stores the superblock 4K from the device start. 
+#
+
+size=$(blockdev --getsize64 "$dev")
+if [ $((size + 0)) -lt 65536 ]; then
+    echo "Unusable ${dev} size ${size}" >&2
+    exit 1
+fi
+
+case "$metadata" in
+    0|0.90)
+        super_addr=$(((size / 65536 - 1) * 16))
+        ;;
+    1.0)
+        # FIXME: test
+        super_addr=$(((size / 4096 - 3)))
+        ;;
+    1.1)
+        # FIXME: test
+        super_addr=0
+        ;;
+    1|1.2)
+        super_addr=1
+        ;;
+    *)
+        echo "Wrong metadata version: $metadata" >&2
+        exit 1
+        ;;
+esac
+
+get_magic()
+{
+    magic=$(head -c4 | bin2hex)
+    case "$magic" in
+        a92b4efc)
+            magic_type=big-endian
+            ;;
+        fc4e2ba9)
+            magic_type=little-endian
+            ;;
+        *)
+            magic_type=wrong
+            ;;
+    esac
+    echo ${1}magic=$magic
+    echo ${1}magic_type=$magic_type
+}
+
+check_bak_magic()
+{
+    eval $(head -c4 $bak|get_magic bak_)
+    if [ -z "$force" -a "$bak_magic_type" = wrong ]; then
+        echo "Wrong $bak superblock backup magic${bak_magic:+: $bak_magic}!" >&2
+        exit 2
+    fi
+}
+
+check_dev_magic()
+{
+    eval $(dd if=$dev bs=4096 count=1 skip=$super_addr status=none|get_magic)
+    if [ -z "$force" -a "$magic_type" = wrong ]; then
+        echo "Wrong $dev superblock $metadata magic${magic:+: $magic}!" >&2
+        exit 2
+    fi
+}
+
+set -e
+
+if [ "$write" ]; then
+    bak_size=$(blockdev --getsize64 "$bak")
+    if [ -z "$force" -a "$bak_size" != 4096 ]; then
+        echo "Wrong backup size $bak_size (expected 4096)!" >&2
+        exit 1
+    fi
+    check_bak_magic
+    check_dev_magic
+    $dryrun dd of=$dev if=$bak bs=4096 count=1 seek=$super_addr status=none
+    if [ -z "$dryrun" ]; then
+        echo "Written $dev superblock from $bak"
+        magic=$bak_magic
+        magic_type=$bak_magic_type
+    fi
+else
+    check_dev_magic
+    $dryrun dd if=$dev of=$bak bs=4096 count=1 skip=$super_addr status=none
+    if [ -z "$dryrun" ]; then
+        echo "Backed up $dev superblock to $bak"
+    fi
+fi
+
+if [ "$verbose" ]; then
+    echo "Device size:        $size"
+    echo "Superblock address: $((super_addr * 4096))"
+    echo "Superblock magic:   $magic ($magic_type)"
+fi
