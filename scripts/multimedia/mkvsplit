@@ -29,7 +29,7 @@ do
             output_dir="$2"
             [ -n "$output_dir" ] && output_dir=${output_dir%/}/
             shift 2;;
-         -n|--dryrun)
+         -n|--dry-run)
             dryrun=echo
             shift;;
          -N|--single-numeration)

@@ -371,15 +371,15 @@ define perl_init
     set $tty_in=$
     call open($tty, 1)
     set $tty_out=$
-    call dup(0)
+    call (int) dup(0)
     set $old_stdin=$
-    call dup(1)
+    call (int) dup(1)
     set $old_stdout=$
-    call dup(2)
+    call (int) dup(2)
     set $old_stderr=$
-    call dup2($tty_in, 0)
-    call dup2($tty_out, 1)
-    call dup2($tty_err, 2)
+    call (int) dup2($tty_in, 0)
+    call (int) dup2($tty_out, 1)
+    call (int) dup2($tty_err, 2)
     eval "perl_eval \"$ENV{PERLDB_OPTS}='TTY=%s'\"", $tty
     perl_eval "require Enbugger"
 end
