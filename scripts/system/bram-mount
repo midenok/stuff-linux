@@ -1,0 +1,70 @@
+#!/bin/bash
+ramfs_dir=/mnt/1
+ramfs_file=$ramfs_dir/raid1-0.vol
+storage_dir=/mnt/storage
+storage_file=$storage_dir/raid1-1.vol
+sync_bitmap=$storage_dir/raid1.sbmp
+volume_size=1g
+md_dev=/dev/md22
+bram_dir=/mnt/2
+
+set -e
+
+mkdir -p $ramfs_dir
+
+mount -t ramfs | grep -q $ramfs_dir ||
+    mount -t ramfs ramfs $ramfs_dir
+
+if [ ! -e $ramfs_file ]
+then
+    fallocate -xl $volume_size $ramfs_file
+fi
+
+losetup_file()
+{
+    local dev=$(losetup -lnONAME -j $1)
+    [ -z "$dev" ] &&
+        dev=$(losetup --show -f $1)
+    echo $dev
+}
+
+ramfs_dev=$(losetup_file $ramfs_file)
+    
+if [ ! -e $storage_file ]
+then
+    mkdir -p $storage_dir
+    fallocate -xl $volume_size $storage_file
+fi
+
+if [ -b $storage_file ]
+then
+    storage_dev=$storage_file
+elif [ -f $storage_file ]
+then
+    storage_dev=$(losetup_file $storage_file)
+else
+    echo "Storage $storage_file is not block device or regular file" >&2
+    false
+fi
+
+echo "RamFS device: $ramfs_dev"
+echo "Storage device: $storage_dev"
+
+umount $md_dev &> /dev/null || true
+mdadm -S $md_dev
+
+set -x
+mdadm --build $md_dev --level 1 --raid-disks 2 --chunk=16384 \
+    --bitmap=$sync_bitmap --bitmap-chunk=16384 \
+    $ramfs_dev \
+    --write-mostly --write-behind=16383 \
+    $storage_dev
+set +x
+
+mdadm -D $md_dev
+
+mkfs.xfs -f -m crc=0,finobt=0 -i size=1024 $md_dev
+
+mkdir -p $bram_dir
+mount -o logbsize=256k $md_dev $bram_dir
+set +e
