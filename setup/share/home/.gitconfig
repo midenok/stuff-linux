@@ -18,6 +18,7 @@
 	submoduleSummary = 0
 [diff]
 	ignoreSubmodules = all
+	noprefix = true
 [branch]
 	autosetuprebase = always
 [merge]
@@ -153,3 +154,5 @@
 [pager]
 	s = "sed 's/\\x1b\\[[0-9;]*m//g'|filterdiff --annotate|colordiff|less -FRX"
 	d = "sed 's/\\x1b\\[[0-9;]*m//g'|filterdiff --annotate|colordiff|less -FRX"
+[remote "mariadb"]
+	prune = true
