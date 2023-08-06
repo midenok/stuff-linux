@@ -366,20 +366,21 @@ define perl_stop
 end
 
 define perl_init
+    python import os
     python gdb.execute("set $tty=\"" + os.ttyname(0) + "\"")
     call open($tty, 0)
     set $tty_in=$
     call open($tty, 1)
     set $tty_out=$
-    call (int) dup(0)
+    call (int) 'dup@plt'(0)
     set $old_stdin=$
-    call (int) dup(1)
+    call (int) 'dup@plt'(1)
     set $old_stdout=$
-    call (int) dup(2)
+    call (int) 'dup@plt'(2)
     set $old_stderr=$
-    call (int) dup2($tty_in, 0)
-    call (int) dup2($tty_out, 1)
-    call (int) dup2($tty_err, 2)
+    call (int) 'dup2@plt'($tty_in, 0)
+    call (int) 'dup2@plt'($tty_out, 1)
+    call (int) 'dup2@plt'($tty_out, 2)
     eval "perl_eval \"$ENV{PERLDB_OPTS}='TTY=%s'\"", $tty
     perl_eval "require Enbugger"
 end
