@@ -15,6 +15,7 @@ set pagination off
 set logging file ~/gdb.log
 set logging overwrite
 set verbose off
+set width 0
 #set target-async on
 #set non-stop on
 
@@ -71,31 +72,32 @@ define confirm
     show confirm
 end
 
-define logging
+define log
     if $argc == 0
         set logging enabled off
         set style enabled off
+        set logging overwrite on
         set logging enabled on
-        show logging
-        echo Logging is on\n
     else
         if $argc == 1
             if !$_streq("$arg0", "status")
                 if $_streq("$arg0", "off")
+                    set logging enabled off
                     set style enabled on
                 end
                 if $_streq("$arg0", "on")
+                    set logging enabled off
                     set style enabled off
+                    set logging overwrite on
+                    set logging enabled on
                 end
-                set logging $arg0
-                echo Logging is $arg0\n
-            else
-                show logging
             end
         else
             set logging $arg0 $arg1
         end
     end
+    show logging file
+    show logging enabled
 end
 
 define colors
@@ -112,6 +114,7 @@ define a
 end
 
 define btc
+    set width 0
     echo ```c++\n
     if $argc == 0
         backtrace
@@ -323,6 +326,14 @@ end
 
 define pitem
     p dbug_print_item($arg0)
+end
+
+define pselect
+    p dbug_print_select($arg0)
+end
+
+define punit
+    p dbug_print_unit($arg0)
 end
 
 # dumping macros
