@@ -82,9 +82,15 @@ grep -q 'trap\s.*\sDEBUG' ~/.bashrc || cat << 'EOF' >>~/.bashrc
 
 ### Added by /etc/profile.d/debug_trap.sh:
 if [[ "$(type -t debug_trap)" != function ]]; then
-    source /etc/profile.d/debug_trap.sh
+    if [[ -f /etc/profile.d/debug_trap.sh ]]; then
+        source /etc/profile.d/debug_trap.sh
+    elif [[ -x ~/bin/debug_trap.sh ]]; then
+        source ~/bin/debug_trap.sh
+    fi
 fi
-shopt -s extdebug
-PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }trap debug_trap DEBUG"
-trap debug_trap DEBUG
+if [[ "$(type -t debug_trap)" = function ]]; then
+    shopt -s extdebug
+    PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }trap debug_trap DEBUG"
+    trap debug_trap DEBUG
+fi
 EOF
