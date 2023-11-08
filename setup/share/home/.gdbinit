@@ -402,4 +402,8 @@ define attach_perl
     perl_stop
 end
 
+define curdir
+    print (char *) get_current_dir_name()
+end
+
 source ~/.gdbinit.py

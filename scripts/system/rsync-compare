@@ -1,2 +1,2 @@
 #!/bin/sh
-rsync -any "$@" | grep '^[^\.]'
+rsync -any "$@" | grep --line-buffered '^[^\.]'

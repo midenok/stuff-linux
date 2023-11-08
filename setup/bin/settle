@@ -1,0 +1,32 @@
+#!/bin/bash
+set -ex
+to=$1
+ssh $1 "mkdir -p ~/bin"
+scp ~/.emacs \
+    ~/.gdbinit \
+    ~/.gdbinit.py \
+    ~/.gitconfig \
+    ~/.inputrc \
+    ~/.screenrc $to:
+
+scp ~/.ssh/config $to:.ssh/
+
+for f in /etc/profile.d/debug_trap.sh ~/bin/debug_trap.sh
+do
+  if [ -f "$f" ]
+  then
+    scp "$f" $to:bin/
+    ssh $1 "bin/debug_trap.sh"
+    break
+  fi
+done
+
+files=("$0")
+for f in bb-prepare bush-prepare cmake-ln gdb-attach install iwatch repl valgrind-badmem build-mydumper
+do
+  p=~/bin/$f
+  [ -x "$p" ] &&
+    files+=("$p")
+done
+
+scp "${files[@]}" $to:bin/

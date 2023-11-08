@@ -30,6 +30,7 @@
 	sm = submodule
 	s = show --pretty=oneline
 	d = diff --pretty=oneline
+	l = log --oneline
 	contains = branch -r --contains
 	cdiff = diff --cached
 	st = status -s -uno
@@ -40,10 +41,10 @@
 	last = log -1 HEAD
 	msg = show -s --format=%B
 	symref = symbolic-ref
-	rbi = "!f() { unset a; [ -z \"$*\" ] && a=HEAD~~~~~~~~~~~~~~~~~~; git rebase -i $a \"$@\"; }; f"
-	rbc = rebase --continue
+	rbi = "!f() { unset a; [ -z \"$*\" ] && a=HEAD~~~~~~~~~~; git rebase -i $a \"$@\"; }; f"
 	cp = cherry-pick
-	cpc = cherry-pick --continue
+	cpc = -c core.editor=true cherry-pick --continue
+	cpa = cherry-pick --abort
 	src = rev-parse --show-toplevel
 	pbr = rev-parse --abbrev-ref HEAD
 	recent = for-each-ref --sort=-committerdate --count=30 --format='%(refname:short)' refs/heads/
@@ -71,10 +72,10 @@
 		git push -u $remote $dst; \
 		git br -D $src; \
 		git push $remote --delete $src; }; f"
-	cont = "!f() { \
+	rbc = "!f() { \
 		s=$(git status|head -n1); \
 		if echo $s|grep -q ' rebase '; then \
-			git rebase --continue; \
+			git -c core.editor=true rebase --continue; \
 		fi;}; f"
 	orig = "!f() { \
 		d=$(git src)/.git/rebase-apply; \
