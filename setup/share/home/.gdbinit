@@ -16,6 +16,7 @@ set logging file ~/gdb.log
 set logging overwrite
 set verbose off
 set width 0
+set debuginfod enabled off
 #set target-async on
 #set non-stop on
 

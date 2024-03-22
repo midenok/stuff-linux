@@ -10,8 +10,6 @@
 	recurseSubmodules = no
 [pull]
 	rebase = true
-[fetch]
-	recurseSubmodules = on-demand
 [submodule]
 	recurse = true
 [status]
@@ -31,6 +29,7 @@
 	s = show --pretty=oneline
 	d = diff --pretty=oneline
 	l = log --oneline
+	g = log --oneline --grep
 	contains = branch -r --contains
 	cdiff = diff --cached
 	st = status -s -uno
@@ -159,3 +158,5 @@
 	d = "sed 's/\\x1b\\[[0-9;]*m//g'|filterdiff --annotate|colordiff|less -FRX"
 [remote "mariadb"]
 	prune = true
+[fetch]
+	recurseSubmodules = on-demand
