@@ -1,0 +1,36 @@
+#!/bin/bash
+# Supply two disk devices as arguments
+d1=$1
+d2=$2
+vars="UUID TYPE LABEL PARTLABEL PARTUUID"
+declare -A noteq
+noteq=([UUID]=1 [LABEL]=1 [PARTUUID]=1)
+get_ids()
+{
+    eval $(blkid -oexport $1)
+    for v in $vars; do
+        eval ${v}_${2}=\$$v
+    done
+}
+i=1
+while true; do
+    p1=${d1}p$i
+    p2=${d2}p$i
+    [ ! -e $p1 -o ! -e $p2 ] &&
+        break
+    get_ids $p1 1
+    get_ids $p2 2
+    for v in $vars; do
+        eval v1=\$${v}_1
+        eval v2=\$${v}_2
+        [ -z "$v1" -a -z "$v2" ] &&
+            continue
+        if ((${noteq[$v]})); then
+            [ "$v1" = "$v2" ] &&
+                echo "$v is same in $p1, $p2: $v1"
+        elif [ "$v1" != "$v2" ]; then
+            echo "$v isn't same in $p1, $p2: $v1 vs $v2"
+        fi
+    done
+    ((++i))
+done
