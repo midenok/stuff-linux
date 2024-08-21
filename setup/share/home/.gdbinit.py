@@ -38,8 +38,8 @@ class NextSource(gdb.Command):
                     break
 NextSource()
 
-# sys.path.append("/usr/local/lib/python2.7/dist-packages")
-# import duel
+sys.path.append("/usr/local/lib/python3.10/dist-packages")
+import duel
 
 #from pretty_printer import PrettyPrinter
 #

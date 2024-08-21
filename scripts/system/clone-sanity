@@ -7,6 +7,9 @@ declare -A noteq
 noteq=([UUID]=1 [LABEL]=1 [PARTUUID]=1)
 get_ids()
 {
+    for v in $vars; do
+        eval unset $v
+    done
     eval $(blkid -oexport $1)
     for v in $vars; do
         eval ${v}_${2}=\$$v

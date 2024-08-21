@@ -28,10 +28,17 @@
 	sm = submodule
 	s = show --pretty=oneline
 	d = diff --pretty=oneline
-	l = log --oneline
+	l = log --oneline -n 30
+	ll = log --oneline -n 60
+	lll = log --oneline
+	l2 = log --format='%h %<(80,trunc)%s'
 	g = log --oneline --grep
 	contains = branch -r --contains
 	cdiff = diff --cached
+	ignore = update-index --assume-unchanged
+	unignore = update-index --no-assume-unchanged
+	ignoring = !git ls-files -v|grep '^h'
+	conflicts = !git --no-pager diff --name-only --diff-filter=U |xargs grep -c '^=======$'
 	st = status -s -uno
 	stat = show --ignore-submodules=none --stat --oneline
 	cstat = "!git --no-pager diff --name-only --diff-filter=U |xargs grep -c '^=======$'"
@@ -39,6 +46,7 @@
 	unstage = reset HEAD --
 	last = log -1 HEAD
 	msg = show -s --format=%B
+	oneline = show -s --format=oneline
 	symref = symbolic-ref
 	rbi = "!f() { unset a; [ -z \"$*\" ] && a=HEAD~~~~~~~~~~; git rebase -i $a \"$@\"; }; f"
 	cp = cherry-pick
@@ -54,7 +62,7 @@
 		if [ "$wb" = "$back" ]; then \
 			eval `git for-each-ref --sort=-committerdate --count=2 --format='back=%(refname:short)' refs/heads/`; \
 		fi; \
-		git checkout $back; }; f"
+		git checkout "$@" $back; }; f"
 	prb = rev-parse --abbrev-ref --symbolic-full-name @{u}
 	pr = "!f() { \
 		wb=$(git pbr); \

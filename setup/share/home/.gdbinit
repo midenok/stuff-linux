@@ -136,15 +136,24 @@ end
 
 define t
     thread $arg0
+    set width 0
     bt
 end
 
 define tl
+    set width 0
     info threads
 end
 
 define tt
+    set width 0
     thread apply all bt
+end
+
+define ttlog
+    log
+    tt
+    log off
 end
 
 # breakpoint macros
