@@ -416,4 +416,14 @@ define curdir
     print (char *) get_current_dir_name()
 end
 
-source ~/.gdbinit.py
+python
+import os
+
+def source_if_exists(filename):
+    filename = os.path.expanduser(filename)
+    if os.path.isfile(filename):
+        gdb.execute(f"source {filename}")
+
+source_if_exists("~/.gdbinit.py")
+source_if_exists("~/startup.gdb")
+end
