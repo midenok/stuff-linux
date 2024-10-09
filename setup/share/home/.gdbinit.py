@@ -66,5 +66,41 @@ class GrepCmd (gdb.Command):
                 if args[1] in line:
                     print(line)
 
-GrepCmd()
+GrepCmd
 
+
+import gdb
+
+class FilterThreadsByFunction(gdb.Command):
+    """Filter threads by function name and display their backtraces."""
+
+    def __init__(self):
+        super(FilterThreadsByFunction, self).__init__("filter_threads", gdb.COMMAND_USER)
+
+    def invoke(self, arg, from_tty):
+        func_name = arg.strip()
+        if not func_name:
+            print("Usage: filter_threads <function_name>")
+            return
+
+        matching_threads = []
+
+        # Iterate through all threads
+        for thread in gdb.inferiors()[0].threads():
+            thread.switch()
+            bt = gdb.execute("bt -frame-arguments none -frame-info short-location -no-filters", to_string=True)  # Get backtrace
+
+            # Check if the function name is in the backtrace
+            if func_name in bt:
+                matching_threads.append((thread.num, thread))
+
+        # Print results
+        if matching_threads:
+            for thread_id, thread in matching_threads:
+                thread.switch()
+                print(f"\nThread {thread_id}:")
+                gdb.execute("bt")
+        else:
+            print(f"No threads found with function name '{func_name}'.")
+
+FilterThreadsByFunction()

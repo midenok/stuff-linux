@@ -288,6 +288,14 @@ define b
     end
 end
 
+define btt
+    break $arg0
+    commands
+        tt
+    end
+end
+
+
 define coff
     define c
     end
@@ -377,7 +385,7 @@ end
 
 # perl
 
-define perl_eval
+# define perl_eval
     call (void*)Perl_eval_pv((void*)Perl_get_context(), $arg0, 0)
 end
 
