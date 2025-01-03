@@ -12,6 +12,8 @@ screen
 ```
 This means that your compiled DB will be used by terminfo.
 
+You may [disable global shortcuts](https://askubuntu.com/a/1286401/335914) in Konsole for Ctrl+Fx, Alt+Fx to work.
+
 Run `tack`, then `n) begin testing` -> `f) test function keys`, you may see:
 ```
 Testing ENQ/ACK, standby...
