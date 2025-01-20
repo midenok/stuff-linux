@@ -171,13 +171,57 @@ Otherwise call `kill-word'"
 (setq auto-save-list-file-prefix
     emacs-tmp-dir)
 
+(defun export-installed-packages (filename)
+  "Export the list of installed packages to FILENAME.
+If FILENAME is not provided, use \"/etc/install-packages.el\" as the default."
+  (setq f "/tmp/install-packages.el")
+  (interactive
+   (list
+    (read-file-name "Export installed packages to file: " f f)))
+  (with-temp-buffer
+    (dolist (pkg package-activated-list)
+      (insert (format "(package-install '%S)\n" pkg)))
+    (write-file filename))
+  (message "Installed packages exported to %s" filename))
+
+(defun import-installed-packages (filename) ""
+  (setq f "/tmp/install-packages.el")
+  (interactive
+   (list
+    (read-file-name "Import installed packages from file: " f f)))
+  (load-file filename)
+  (message "Installed packages from %s" filename))
+
+(defun install-selected-packages ()
+  "Install packages listed in `package-selected-packages`.
+Refresh package contents if necessary."
+  (interactive)
+  (require 'package)
+
+  ;; Add MELPA repository if not already present
+  (unless (assoc "melpa" package-archives)
+    (add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t))
+
+  ;; Initialize package management
+  (package-initialize)
+
+  ;; Refresh package contents if necessary
+  (unless package-archive-contents
+    (package-refresh-contents))
+
+  ;; Install the selected packages
+  (package-install-selected-packages)
+  (message "Selected packages have been installed."))
+
+
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
  '(load-home-init-file t t)
- '(package-selected-packages '(compat magit editorconfig cmake-mode))
+ '(package-selected-packages
+   '(seq with-editor transient dash magit-section compat magit editorconfig cmake-mode))
  '(vc-follow-symlinks t))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
