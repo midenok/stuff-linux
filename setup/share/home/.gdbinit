@@ -385,7 +385,7 @@ end
 
 # perl
 
-# define perl_eval
+define perl_eval
     call (void*)Perl_eval_pv((void*)Perl_get_context(), $arg0, 0)
 end
 

@@ -32,6 +32,9 @@
 	ll = log --oneline -n 60
 	lll = log --oneline
 	l2 = log --format='%h %<(80,trunc)%s'
+	llla = log --pretty=format:'%C(yellow)%h %C(cyan)%<(10,trunc)%al %Creset%s'
+	lla = llla -n 60
+	la = llla -n 30
 	g = log --oneline --grep
 	contains = branch -r --contains
 	cdiff = diff --cached
@@ -151,6 +154,14 @@
 	glog = log --graph
 	find-merge = "!sh -c 'commit=$0 && branch=${1:-HEAD} && (git rev-list $commit..$branch --ancestry-path | cat -n; git rev-list $commit..$branch --first-parent | cat -n) | sort -k2 -s | uniq -f1 -d | sort -n | tail -1 | cut -f2'"
 	show-merge = "!sh -c 'merge=$(git find-merge $0 $1) && [ -n \"$merge\" ] && git show $merge'"
+	alias = "!f() { \
+		[ -z \"$1\" ] && \
+			git config --name-only --get-regexp '^alias\\.' | \
+				while read a; do a=${a##alias.}; echo $a; done|sort \
+			|| git config alias.$1; }; f"
+	aliases = "!f() { \
+		git config --get-regexp '^alias\\.' | \
+            while read a b; do a=${a##alias.}; echo $a'\\t'$b; done|sort|column -td -l 2 -W 2; }; f"
 [rerere]
 	enabled = true
 [gc]
