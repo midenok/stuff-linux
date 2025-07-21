@@ -1,2 +1,2 @@
 #!/bin/sh
-rsync -any "$@" | grep --line-buffered '^[^\.]'
+rsync -acni --delete "$@" | grep --line-buffered '^[^\.]'

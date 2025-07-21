@@ -9,6 +9,7 @@ set print pretty on
 set print asm-demangle on
 set print thread-events off
 set print repeats 0
+set print static-members off
 set style address intensity bold
 set style address foreground magenta
 set pagination off
@@ -309,6 +310,18 @@ define con
     echo Not ignoring 'c'.\n
 end
 
+define wl
+    watch -l $arg0
+end
+
+define wv
+    watchvar $arg0
+end
+
+define uv
+    unwatchvar $arg0
+end
+
 # step macros
 
 define nn
@@ -372,7 +385,7 @@ define xx
 end
 
 define wh
-    winheight src +8
+    winheight cmd -8
 end
 
 define dmp
@@ -434,4 +447,5 @@ def source_if_exists(filename):
 
 source_if_exists("~/.gdbinit.py")
 source_if_exists("~/startup.gdb")
+# source_if_exists("/home/midenok/src/gdbWatchVariableWindow/watchVariable.py"
 end

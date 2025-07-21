@@ -220,6 +220,20 @@ Refresh package contents if necessary."
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
  '(load-home-init-file t t)
+;;  '(magit-blame-styles
+;;    '((headings
+;;       (heading-format . "%-20a %C %s
+;; "))
+;;      (highlight
+;;       (highlight-face . magit-blame-highlight))
+;;      (lines
+;;       (show-lines . t)
+;;       (show-message . t))))
+ '(magit-blame-styles
+      '((margin
+         (margin-format " %H %s")
+         (margin-width . 25)
+         (margin-face . magit-blame-margin))))
  '(package-selected-packages
    '(seq with-editor transient dash magit-section compat magit editorconfig cmake-mode))
  '(vc-follow-symlinks t))
@@ -245,5 +259,12 @@ Refresh package contents if necessary."
  '(smerge-refined-removed ((t (:inherit smerge-refined-change :foreground "red"))))
  '(smerge-upper ((t nil)))
  '(trailing-whitespace ((t (:background "color-233")))))
+
+(advice-add 'magit-blame-format-margin :filter-return
+  (lambda (text)
+    (replace-regexp-in-string 
+     "\\([a-f0-9]\\{7\\}\\)[a-f0-9]*" 
+     "\\1" 
+     text)))
 
 (setq scroll-error-top-bottom 't)
