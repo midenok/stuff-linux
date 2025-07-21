@@ -53,6 +53,31 @@
 	symref = symbolic-ref
 	rbi = "!f() { unset a; [ -z \"$*\" ] && a=HEAD~~~~~~~~~~; git rebase -i $a \"$@\"; }; f"
 	cp = cherry-pick
+	cpto = "!f() { \
+		local usage='Usage: git cpto [--push] to_branch [cp_args from_branch]'; \
+		if [ $# -eq 0 ]; then \
+			echo $usage; \
+			return 1; \
+		fi; \
+		local psh=\"\"; \
+		if [ \"$1\" = --push ]; then \
+			psh=y; shift; \
+			if [ $# -eq 0 ]; then \
+				echo $usage; \
+				return 1; \
+			fi; \
+		fi; \
+		local to=$1; shift; \
+		local from; \
+		if [ $# -eq 0 ]; then \
+			from=`git rev-parse --short HEAD`; \
+		else \
+			from=$1; shift; \
+		fi; \
+		git co $to; \
+		git cp \"$from\" \"$@\"; \
+		[ \"$psh\" = y ] && git push; \
+		git co -; }; f"
 	cpc = -c core.editor=true cherry-pick --continue
 	cpa = cherry-pick --abort
 	src = rev-parse --show-toplevel
