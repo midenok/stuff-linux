@@ -58,6 +58,7 @@
 (add-hook 'smerge-mode-hook
   (lambda ()
     (auto-revert-mode 1)
+    (define-key smerge-mode-map (kbd "<f1>") 'magit-show-commit)
     (define-key smerge-mode-map (kbd "<f2>") 'smerge-prev)
     (define-key smerge-mode-map (kbd "<f3>") 'smerge-next)
     (define-key smerge-mode-map (kbd "<f4>") 'smerge-keep-current)

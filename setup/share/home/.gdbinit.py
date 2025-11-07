@@ -104,3 +104,109 @@ class FilterThreadsByFunction(gdb.Command):
             print(f"No threads found with function name '{func_name}'.")
 
 FilterThreadsByFunction()
+
+import gdb.printing
+import threading
+
+class LexIdentColumnPrinter:
+    "Pretty-printer for Lex_ident_column"
+    _recursion_guard = threading.local()
+
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        if getattr(self._recursion_guard, "inside", False):
+            return "<recursive>"
+
+        self._recursion_guard.inside = True
+        try:
+            str_ptr = self.val['str']
+            length_val = int(self.val['length'])
+
+            addr_str = str(str_ptr.cast(gdb.lookup_type('void').pointer()))
+
+            try:
+                if addr_str != '0x0':
+                    str_val = f'{addr_str} "{str_ptr.string()}"'
+                else:
+                    str_val = addr_str
+            except:
+                str_val = addr_str
+
+            return f'{{{str_val}, {length_val}}}'
+        finally:
+            self._recursion_guard.inside = False
+
+class ListPrinter:
+    _recursion_guard = threading.local()
+
+    def __init__(self, val):
+        self.val = val
+
+    def to_string(self):
+        # Returning None disables the '= {...}' summary printing
+        return None
+
+    def children(self):
+        if getattr(self._recursion_guard, 'active', False):
+            return
+        self._recursion_guard.active = True
+        try:
+            yield ('first', self.val['first'])
+            yield ('last', self.val['last'])
+            yield ('elements', self.val['elements'])
+        except Exception:
+            return
+        finally:
+            self._recursion_guard.active = False
+
+class ExactMatchCollection:
+    """
+    Custom pretty-printer collection that uses exact type name matching
+    as a lightweight alternative to GDB's RegexpCollectionPrettyPrinter,
+    which matches type names using regular expressions.
+    """
+    def __init__(self):
+        self.printers = {
+            "LEX_CSTRING": LexIdentColumnPrinter,
+            "Lex_ident_column": LexIdentColumnPrinter,
+            "Lex_ident_fs": LexIdentColumnPrinter,
+            "Lex_ident_db": LexIdentColumnPrinter,
+            "Lex_ident_table": LexIdentColumnPrinter,
+            # Add more type printers here if needed
+        }
+        self.name = "exact_match_printer_collection"
+
+    def __call__(self, val):
+        type_name = str(val.type)
+        if type_name in self.printers:
+            return self.printers[type_name](val)
+        return None
+
+def register_printers():
+    # Remove any existing global printers with the same name to avoid duplicates
+    to_remove = [pp for pp in gdb.pretty_printers if getattr(pp, 'name', None) == "exact_match_printer_collection"]
+    for pp in to_remove:
+        gdb.pretty_printers.remove(pp)
+
+    printer = ExactMatchCollection()
+    gdb.pretty_printers.append(printer)
+
+def register_printers():
+    # Remove old printers with the same name to avoid duplicates
+    to_remove = [pp for pp in gdb.pretty_printers if getattr(pp, 'name', None) == "exact_match_printer_collection"]
+    for pp in to_remove:
+        gdb.pretty_printers.remove(pp)
+    gdb.pretty_printers.append(ExactMatchCollection())
+    # Create a RegexpCollectionPrettyPrinter and add List<> template match
+    list_printers = gdb.printing.RegexpCollectionPrettyPrinter("list_printers")
+    list_printers.add_printer('List', '^List<.*>$', ListPrinter)
+    # Register globally
+    gdb.printing.register_pretty_printer(None, list_printers)
+
+def on_first_objfile(event):
+    register_printers()
+    gdb.events.new_objfile.disconnect(on_first_objfile)
+
+gdb.events.new_objfile.connect(on_first_objfile)

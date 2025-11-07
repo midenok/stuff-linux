@@ -128,6 +128,7 @@
 	con3 = checkout --conflict=diff3
 	showcon = "!git con $(git bothmod) && git diff && git rerere && true"
 	amend = commit --amend
+	a = commit --amend --no-edit
 	aa = commit --amend -a --no-edit
 	aaa = commit --amend -a
 	abort = rebase --abort

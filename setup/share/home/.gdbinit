@@ -20,6 +20,7 @@ set width 0
 set debuginfod enabled off
 #set target-async on
 #set non-stop on
+set index-cache enabled on
 
 # for red hat:
 # set build-id-verbose 0
