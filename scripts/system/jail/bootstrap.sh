@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Download and unpack specific chroot image set by $release and $mirror
+
 get_last_version()
 {
     local package=$1
@@ -16,7 +18,7 @@ chmkdir()
 
 release=hardy
 mirror='http://old-releases.ubuntu.com/ubuntu/'
-repo_url=${mirror%/}'/ubuntu/pool/main/d/debootstrap/'
+repo_url=${mirror%/}'/pool/main/d/debootstrap/'
 
 update_debootstrap()
 {
@@ -28,10 +30,12 @@ update_debootstrap()
     (
         set -e
         chmkdir "$release"
+        pushd .
         chmkdir "$archives"
         echo -n Downloading $package...
         wget -nc -q "${repo_url%/}/$package"
         echo " ok"
+        popd
         dpkg -x "$archives/$package" .
     )
 }
