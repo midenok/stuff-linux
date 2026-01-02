@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# The purpose of this script is to build versatile initrd image
+# with all the system tools needed for the convenient recovery.
+#
+# TODO: minbase contains needless login programs
+#
+# Installation:
+#
+# 1. symlink this script into /etc/initramfs-tools/hooks
+# 2. symlink kernel into kernel-A.B.C-rescue and modules into /lib/modules/A.B.C-rescue
+# 3. update-initramfs
+# 4. update-grub
+#
+# The bloated initrd will be built only for *-rescue versions.
+#
+# TODO: download debootstrap in case it is missing, check rsync existence
+#
+
+PREREQ=""
+prereqs()
+{
+     echo "$PREREQ"
+}
+
+case $1 in
+prereqs)
+     prereqs
+     exit 0
+     ;;
+esac
+
+[[ "$version" != *-rescue ]] &&
+    exit 0
+
+set -e
+. /etc/lsb-release
+URL=$(apt-cache policy | sed -rn '/http:/{s/^.*(http:[^ ]*).*$/\1/;p;q}')
+# dst=$(mktemp -d initrd.XXXXX)
+dst=/var/tmp/bootstrap-initrd
+if [ ! -d "$dst" ]
+then
+    fakeroot debootstrap --no-check-sig --no-check-certificate \
+        --foreign --variant=minbase \
+        --include parted,mc,lvm2 \
+        --components=main,universe \
+        "$@" $DISTRIB_CODENAME $dst $URL
+    rm -rf $dst/var/cache/apt/archives
+    rm -rf $dst/debootstrap
+    echo -n "Built bootstrap: "
+else
+    echo "Using old bootstrap: "
+fi
+du -hs $dst
+[ -z "$DESTDIR" ] && exit 0
+echo -n "Installing into ${DESTDIR}..."
+rsync -a --exclude={proc,sys,dev,tmp} "$dst/" "$DESTDIR/"
+echo " done!"
