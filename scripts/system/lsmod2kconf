@@ -1,0 +1,33 @@
+#!/bin/bash
+
+# Translate loaded modules from lsmod to Kconfig variables
+# FIXME: imprecise
+
+set -e
+exclude_list=$(cat<<'EOF'
+Module
+socwatch2_15
+vtsspp
+sep5
+socperf3
+pax
+EOF
+)
+kernel_src=/home/midenok/src/linux-6.18.0
+lsmod | while read a b c
+do
+    grep -q "^${a}$" <<< $exclude_list &&
+        continue
+    f=$(modinfo $a|grep "^filename:"|(read a b; echo $b))
+    f="${f#/*/}"
+    f="${f#*/}"
+    f="${f#*/}"
+    [[ "$f" == kernel/* ]] ||
+        continue
+    f="${f#*/}"
+    p=$(dirname "$f")
+    f=$(basename "$f")
+    f=${f%.ko.zst}.o
+    mf="${kernel_src}/${p}/Makefile"
+    echo $f $(grep $f "$mf"|grep -oP "\KCONFIG_[^)]*")
+done
