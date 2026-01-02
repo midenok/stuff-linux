@@ -1,0 +1,2 @@
+#!/bin/bash
+xxd -g1 "$@" | cut -c1-57
