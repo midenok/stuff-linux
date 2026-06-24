@@ -43,6 +43,7 @@
 	ignoring = !git ls-files -v|grep '^h'
 	conflicts = !git --no-pager diff --name-only --diff-filter=U |xargs grep -c '^=======$'
 	st = status -s -uno
+	stt = status --ignored=traditional
 	stat = show --ignore-submodules=none --stat --oneline
 	cstat = "!git --no-pager diff --name-only --diff-filter=U |xargs grep -c '^=======$'"
 	modified = "!f() { git st|grep '^ M '|while read a b; do echo "$b"; done; }; f"
@@ -188,6 +189,19 @@
 	aliases = "!f() { \
 		git config --get-regexp '^alias\\.' | \
             while read a b; do a=${a##alias.}; echo $a'\\t'$b; done|sort|column -td -l 2 -W 2; }; f"
+	wt = worktree
+	wtl = worktree list
+	wtrm = worktree remove
+	wtrmf = worktree remove --force
+	wtp = worktree prune
+	r = remote
+	rls = remote -v
+	rrm = remote remove
+	ra = remote add
+	lsref = "!f() { git for-each-ref $1 --format='%(objectname) %(refname)'; }; f"
+	rmref = update-ref -d
+	cleanup = clean -dxf  -e '.*' -e '*.kdev4' -e '*.test' -e '*.result' -e '*.combination' -e 'extra/mydumper' -e 'mysql-test/suite/bug' -e '*.pl'
+	cleanup2 = clean -dxf  -e '.*' -e '*.kdev4' -e 'extra/mydumper' -e 'mysql-test/suite/bug'
 [rerere]
 	enabled = true
 [gc]
@@ -201,7 +215,7 @@
 [pager]
 	s = "sed 's/\\x1b\\[[0-9;]*m//g'|filterdiff --annotate|colordiff|less -FRX"
 	d = "sed 's/\\x1b\\[[0-9;]*m//g'|filterdiff --annotate|colordiff|less -FRX"
-[remote "mariadb"]
-	prune = true
 [fetch]
 	recurseSubmodules = on-demand
+[includeIf "gitdir:~/src/mariadb/**/"]
+	path = ~/src/mariadb/.gitconfig
