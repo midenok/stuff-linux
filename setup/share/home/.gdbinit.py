@@ -5,7 +5,7 @@ import os.path
 class NextSource(gdb.Command):
     def __init__(self):
         super().__init__(
-            'ns',
+            'nsr',
             gdb.COMMAND_BREAKPOINTS,
             gdb.COMPLETE_NONE,
             False
@@ -14,7 +14,7 @@ class NextSource(gdb.Command):
         argv = gdb.string_to_argv(argument)
         if argv:
             if len(argv) > 1:
-                gdb.write('Usage:\nns [source-name]]\n')
+                gdb.write('Usage:\nns [source-name]\n')
                 return
             source = argv[0]
             full_path = False if os.path.basename(source) == source else True
@@ -23,6 +23,7 @@ class NextSource(gdb.Command):
             source = gdb.selected_frame().find_sal().symtab.fullname()
             full_path = True
         thread = gdb.inferiors()[0].threads()[0]
+        last_line = gdb.selected_frame().find_sal().line
         while True:
             message = gdb.execute('next', to_string=True)
             if not thread.is_valid():
@@ -31,12 +32,51 @@ class NextSource(gdb.Command):
                 cur_source = gdb.selected_frame().find_sal().symtab.fullname()
                 if not full_path:
                     cur_source = os.path.basename(cur_source)
+                cur_line = gdb.selected_frame().find_sal().line
             except:
                 break
             else:
-                if source == cur_source:
+                if source == cur_source and cur_line != last_line:
                     break
 NextSource()
+
+class ReverseSource(gdb.Command):
+    def __init__(self):
+        super().__init__(
+            'rsr',
+            gdb.COMMAND_BREAKPOINTS,
+            gdb.COMPLETE_NONE,
+            False
+        )
+    def invoke(self, argument, from_tty):
+        argv = gdb.string_to_argv(argument)
+        if argv:
+            if len(argv) > 1:
+                gdb.write('Usage:\nrs [source-name]\n')
+                return
+            source = argv[0]
+            full_path = False if os.path.basename(source) == source else True
+
+        else:
+            source = gdb.selected_frame().find_sal().symtab.fullname()
+            full_path = True
+        thread = gdb.inferiors()[0].threads()[0]
+        last_line = gdb.selected_frame().find_sal().line
+        while True:
+            message = gdb.execute('reverse-next', to_string=True)
+            if not thread.is_valid():
+                break
+            try:
+                cur_source = gdb.selected_frame().find_sal().symtab.fullname()
+                if not full_path:
+                    cur_source = os.path.basename(cur_source)
+                cur_line = gdb.selected_frame().find_sal().line
+            except:
+                break
+            else:
+                if source == cur_source and cur_line != last_line:
+                    break
+ReverseSource()
 
 sys.path.append("/usr/local/lib/python3.10/dist-packages")
 import duel

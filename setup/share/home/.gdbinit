@@ -4,7 +4,7 @@ set disassembly-flavor intel
 set history save on
 set history remove-duplicates unlimited
 set history file ~/.gdbhistory
-set print elements 0
+set print elements 300
 set print pretty on
 set print asm-demangle on
 set print thread-events off
