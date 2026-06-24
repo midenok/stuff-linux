@@ -1,3 +1,11 @@
+;; Make Emacs remember cursor position in files between sessions and
+;; save them to a file limiting to 2000 stored positions.
+(save-place-mode 1)
+(setq save-place-file "~/.emacs.d/saveplace")
+(setq save-place-limit 2000)
+
+(setq scroll-error-top-bottom 't)
+
 ;; FIXME: 256 colors work only in xterm-256color:
 ;; screen.xterm-256color and my custom TERM=screen should be merged
 ;; into xterm-256color
@@ -10,6 +18,7 @@
 (setq package-check-signature nil)
 (require 'package)
 (add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t)
+(add-to-list 'package-archives '("nongnu" . "https://elpa.nongnu.org/nongnu/") t)
 (package-initialize)
 
 ;; FIXME: these are not detected by TERM=screen.xterm-256color though
@@ -45,6 +54,11 @@
       (unless found
         (kill-emacs)))))
 
+;; Make PageUp/PageDown move cursor together with the text
+(setq scroll-error-top-bottom t)
+;; (setq scroll-preserve-screen-position t)
+(setq fast-but-imprecise-scrolling t)
+
 ;; (defun my-auto-revert-with-cursor ()
 ;;   "Auto-revert buffer while preserving cursor position."
 ;;   (let ((pos (point)))
@@ -74,6 +88,10 @@
 (global-set-key (kbd "<f23>") (lambda () (interactive) (switch-to-buffer "*scratch*")))
 
 (with-eval-after-load 'git-rebase
+ (define-key git-rebase-mode-map (kbd "<f4>")
+    (lambda () (interactive)
+      (fundamental-mode)
+      (read-only-mode -1)))
   (define-key git-rebase-mode-map (kbd "<f10>")
     (lambda () (interactive)
       (save-buffer)
@@ -91,7 +109,7 @@
 
 ;; words include dashes
 (add-hook 'after-change-major-mode-hook
-  (lambda ()
+ (lambda ()
     (modify-syntax-entry ?- "w")))
 
 ;; navigate words skipping spaces
@@ -214,6 +232,70 @@ Refresh package contents if necessary."
   (package-install-selected-packages)
   (message "Selected packages have been installed."))
 
+(require 'git-commit)
+(require 'magit-process)
+
+;; (with-eval-after-load 'git-commit
+;;  (global-git-commit-mode -1))
+
+;; Show Contained, etc. info by pressing 'N' in Git commit 
+(defun my-toggle-refs ()
+  "Toggle related refs (Parent/Merged/Contained/Follows) in revision buffers."
+  (interactive)
+  (setq magit-revision-insert-related-refs
+        (if magit-revision-insert-related-refs
+            nil
+          'mixed))
+  (when (derived-mode-p 'magit-revision-mode)
+    (magit-refresh)))
+
+(with-eval-after-load 'magit-diff
+  (define-key magit-revision-mode-map (kbd "N") #'my-toggle-refs)
+  (setq magit-revision-insert-related-refs nil)
+  (setq magit-revision-headers-format
+        "Author: %aN <%aE>\nAuthorDate: %ad\n"))
+
+(defun my-git-commit-edit ()
+  (when (string-match "/COMMIT_EDITMSG\\'" (buffer-file-name (buffer-base-buffer)))
+    (run-with-idle-timer 0.1 nil
+			 (lambda ()
+			   (split-window-below)
+			   (if (magit-anything-staged-p t)
+				 (magit-diff-staged)
+			     (magit-show-commit "HEAD"))
+			   (other-window 1)))))
+
+;; ;; (eval-after-load 'git-commit
+;; ;;  '(add-hook 'git-commit-setup-hook 'my-git-commit-edit2))
+
+;; TODO: use eval-after-load or (when featurep
+(add-hook 'find-file-hook 'my-git-commit-edit)
+
+;; (with-eval-after-load 'git-commit
+;;  (global-git-commit-mode -1))
+
+;; FIXME: the blow does not work, though git-commit-setup-hook installs
+;; and direct call for (git-commit-setup) calls it.
+;; (defun my-git-commit-edit ()
+;;   (split-window-below)
+;; )
+;; (with-eval-after-load 'git-commit
+;;   (add-hook 'git-commit-setup-hook #'my-git-commit-edit))
+
+;; Disable fucking needless kill-buffer interactivity
+(with-eval-after-load 'with-editor
+  (fset 'with-editor-kill-buffer-noop
+        (lambda (&optional buffer) t)))
+
+;; sync clipboards emacs and xorg
+(require 'xclip)
+(xclip-mode 1)
+
+;; Do not ask questions when opening file:
+;; Symbolic link to Git-controlled source file; follow link?
+(setq vc-follow-symlinks nil)
+;; Turn off VC completeley (as it displays warning anyway)
+(setq vc-handled-backends nil)
 
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
@@ -267,5 +349,3 @@ Refresh package contents if necessary."
      "\\([a-f0-9]\\{7\\}\\)[a-f0-9]*" 
      "\\1" 
      text)))
-
-(setq scroll-error-top-bottom 't)
