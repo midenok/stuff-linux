@@ -13,21 +13,33 @@ socperf3
 pax
 EOF
 )
-kernel_src=/home/midenok/src/linux-6.18.0
+kernel_src=$HOME/src2/linux-6.6.15
 lsmod | while read a b c
 do
     grep -q "^${a}$" <<< $exclude_list &&
         continue
     f=$(modinfo $a|grep "^filename:"|(read a b; echo $b))
-    f="${f#/*/}"
+    # f=/lib/modules/6.6.15-060615-generic/kernel/drivers/nvme/common/nvme-common.ko.zst
+    f="${f#/*/}" # f=modules/6.6.15-060615-generic/kernel/drivers/nvme/common/nvme-common.ko.zst
     f="${f#*/}"
-    f="${f#*/}"
+    f="${f#*/}" # f=kernel/drivers/nvme/common/nvme-common.ko.zst
     [[ "$f" == kernel/* ]] ||
         continue
-    f="${f#*/}"
-    p=$(dirname "$f")
+    f="${f#*/}" # f=drivers/nvme/common/nvme-common.ko.zst
+    p=$(dirname "$f") # p=drivers/nvme/common
     f=$(basename "$f")
-    f=${f%.ko.zst}.o
-    mf="${kernel_src}/${p}/Makefile"
-    echo $f $(grep $f "$mf"|grep -oP "\KCONFIG_[^)]*")
+    f=${f%.ko.zst}.o # f=nvme-common
+    mf="${kernel_src}/${p}/Makefile" # mf=/home/midenok/src2/linux-6.6.15/drivers/nvme/common/Makefile
+    if [ ! -f "$mf" ]
+    then
+        echo $f
+        continue
+    fi
+    kvar=$(grep $f "$mf"|grep -oP "\KCONFIG_[^)]*")
+    if [ -z "$kvar" ]
+    then
+        echo $f
+    else
+        echo -n # echo $mf $f $kvar
+    fi
 done
